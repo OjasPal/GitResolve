@@ -1,5 +1,0 @@
-langgraph
-google-genai
-python-dotenv
-pydantic
-pytest
