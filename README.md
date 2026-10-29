@@ -24,17 +24,22 @@ The initial agent component uses LangGraph to orchestrate issue analysis and Goo
 
 ## Setup
 
-Requires a compatible Python installation.
+### Prerequisites
+
+- Python 3.12
+- [uv](https://docs.astral.sh/uv/getting-started/installation/)
+
+### Install dependencies
+
+Clone the repository and navigate to its root directory, then run:
 
 ```bash
-python -m venv .venv
+uv sync
 ```
 
-Activate the environment, then install dependencies:
+This creates a virtual environment, installs the project dependencies, and installs the development dependencies required for testing. The committed `uv.lock` ensures consistent dependency versions.
 
-```bash
-python -m pip install -r requirements.txt
-```
+### Configure environment variables
 
 Create a `.env` file in the repository root:
 
@@ -43,12 +48,12 @@ GEMINI_API_KEY=your_api_key_here
 GEMINI_MODEL=gemini-3.8-flash
 ```
 
-Never commit `.env` or expose your API key.
+Replace the placeholder with your own Gemini API key. Never commit `.env` or expose your API key.
 
-## Run tests
+### Run tests
 
 ```bash
-python -m pytest agent -v
+uv run pytest -v
 ```
 
 The automated tests use a mocked LLM response, so they do not require a live Gemini API call.

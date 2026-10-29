@@ -1,0 +1,21 @@
+[project]
+name = "gitresolve-agent"
+version = "0.1.0"
+description = "LangGraph-based AI agent for GitHub issue investigation and bug fixing."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "google-genai",
+    "langgraph",
+    "pydantic",
+    "python-dotenv",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["agent"]
+python_files = ["test_*.py"]
