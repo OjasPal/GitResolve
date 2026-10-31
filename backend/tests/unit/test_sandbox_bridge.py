@@ -8,6 +8,13 @@ from app.worker.context import JobContext
 from app.worker.sandbox import execute
 
 
+def test_verification_preserves_existing_result_argument_order():
+    from app.agent.interface import ExecuteResult
+    summary = {"filesChanged": 1}
+    result = ExecuteResult("fix_ready", "diff", "tests", summary)
+    assert result.summary == summary and result.verification == {}
+
+
 def running_context(env):
     headers = env.headers()
     tid = env.create(headers).json()["id"]

@@ -43,10 +43,10 @@ class ExecuteResult:
     outcome: Literal["fix_ready", "failed"]
     final_diff: str = ""  # exact unified diff that would be used for the PR
     final_tests: str = ""  # redacted before/after test evidence (bounded)
-    verification: dict[str, Any] = field(default_factory=dict)
     summary: dict[str, Any] = field(default_factory=dict)  # filesChanged, linesAdded, linesRemoved, files[]
     failure_code: FailureCode | None = None
     failure_message: str = ""
+    verification: dict[str, Any] = field(default_factory=dict)
 
 
 class AgentRunner(Protocol):
