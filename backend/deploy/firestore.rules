@@ -1,0 +1,9 @@
+rules_version = '2';
+// Only the server SDK (service account via IAM) touches Firestore. Deny every client.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
