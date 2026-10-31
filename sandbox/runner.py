@@ -34,7 +34,7 @@ def _clean_output(raw: bytes | str, max_bytes: int) -> tuple[str, bool]:
 
 def _docker_run_args(container: str, repo_dir: Path, command: list[str], patch_path=None) -> list[str]:
     args = [
-        "docker", "run", "-d", "--name", container,
+        "docker", "run", "-d", "--pull", "never", "--name", container,
         "--user", "10001:10001", "--network", "none", "--read-only",
         "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
         "--memory", "2g", "--memory-swap", "2g", "--cpus", "2", "--pids-limit", "256",

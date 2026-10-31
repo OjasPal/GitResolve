@@ -3,6 +3,7 @@
 Build: `docker build -t gitresolve-sandbox:poc sandbox`.
 Test: `python -m pytest sandbox -q -ra`.
 Docker tests require a Linux Docker engine and the freshly built image.
+Execution never pulls a missing image automatically; build the reviewed image first.
 
 The worker calls `run_sandbox(ExecutionRequest(...), cancel=callback)`.
 Provide the task ID, public GitHub HTTPS URL, exact commit SHA, argv command,
