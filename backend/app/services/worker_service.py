@@ -2,6 +2,7 @@
 must come from the current lease owner; otherwise `LeaseLost` is raised."""
 
 import json
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -38,6 +39,13 @@ from app.services.transitions import (
 ARTIFACT_MAX_BYTES = 256 * 1024
 MAX_ARTIFACTS_PER_TASK = 20
 PLAN_MAX_BYTES = 8 * 1024
+
+
+class ExecutionLimit(Exception):
+    def __init__(self, code: FailureCode):
+        self.code = code
+        super().__init__(code.value)
+
 # Structured fields a worker may set through `update_progress`.
 PROGRESS_FIELDS = frozenset({"baseSha", "testCommand", "baseline", "reproduction"})
 _PHASE_FOR_STATUS = {
@@ -67,6 +75,9 @@ class WorkerService:
         except Exception:
             raise LeaseLost(task_id) from None
         if ctx.task.get("leaseOwner") != worker_id or not is_active(ctx.task["status"]):
+            raise LeaseLost(task_id)
+        expires = ctx.task.get("leaseExpiresAt")
+        if expires is None or expires <= self.clock():
             raise LeaseLost(task_id)
         return ctx
 
@@ -123,6 +134,8 @@ class WorkerService:
 
         def fn(txn: Txn) -> bool:
             ctx = self._owned(txn, task_id, worker_id)
+            if ctx.task.get("deadlineAt") and now >= ctx.task["deadlineAt"]:
+                raise ExecutionLimit(FailureCode.TIMEOUT)
             txn.update(f"tasks/{task_id}", self._lease_updates(now, worker_id))
             return bool(ctx.task.get("cancelRequested"))
 
@@ -148,6 +161,20 @@ class WorkerService:
         def fn(txn: Txn) -> Doc:
             ctx = self._owned(txn, task_id, worker_id)
             updates: dict[str, Any] = dict(fields or {})
+            limits = ctx.task["limits"]
+            if attempts_used is not None:
+                if type(attempts_used) is not int or attempts_used < ctx.task["attempts"]["used"]:
+                    raise ValueError("Attempt counters must be monotonic integers.")
+                if attempts_used > limits["maxRepairAttempts"]:
+                    raise ExecutionLimit(FailureCode.BUDGET_EXCEEDED)
+            for key, value in (budgets or {}).items():
+                if key not in ctx.task["budgets"] or type(value) not in (int, float) or not math.isfinite(value):
+                    raise ValueError("Invalid usage counter.")
+                if value < ctx.task["budgets"][key]:
+                    raise ValueError("Usage counters must be monotonic.")
+                cap = {"modelCalls": limits["maxModelCalls"], "execSeconds": limits["taskTimeoutSeconds"]}.get(key)
+                if cap is not None and value > cap:
+                    raise ExecutionLimit(FailureCode.BUDGET_EXCEEDED)
             if attempts_used is not None:
                 updates["attempts"] = {**ctx.task["attempts"], "used": attempts_used}
             if budgets is not None:
@@ -170,6 +197,8 @@ class WorkerService:
         attempt: int | None, now: datetime,
     ) -> Doc:
         clean = redact(content)
+        if type_ == ArtifactType.FINAL_DIFF and clean != content:
+            raise ValueError("final_diff cannot be stored without changing its validated content.")
         raw = clean.encode()
         truncated = len(raw) > ARTIFACT_MAX_BYTES
         if truncated:
@@ -343,7 +372,7 @@ class WorkerService:
         ctx = read_ctx(txn, task_id)
         task = ctx.task
         expires = task.get("leaseExpiresAt")
-        if expires is None or expires >= now:
+        if expires is None or expires > now:
             return False
         status = TaskStatus(task["status"])
         if status not in _PHASE_FOR_STATUS:

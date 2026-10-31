@@ -107,7 +107,15 @@ def active_slot_error(holder_id: str | None) -> ApiError:
 
 
 def build_event(task: Doc, seq: int, stage: str, spec: EventSpec, now: datetime, settings: Settings) -> Doc:
-    data = spec.data
+    # Metadata is a closed, scalar-only vocabulary, never arbitrary tool output.
+    allowed = {"from", "to", "stage", "code", "n", "number", "diffHash",
+               "durationMs", "ran", "passed", "failed", "timedOut", "attempt",
+               "modelCalls", "inputTokens", "outputTokens", "execSeconds"}
+    data = {
+        key: redact(value, 200) if isinstance(value, str) else value
+        for key, value in spec.data.items()
+        if key in allowed and isinstance(value, (str, int, float, bool, type(None)))
+    }
     if len(json.dumps(data, default=str).encode()) > EVENT_DATA_MAX_BYTES:
         data = {"truncated": True}
     return {

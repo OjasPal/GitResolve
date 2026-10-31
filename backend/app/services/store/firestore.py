@@ -96,7 +96,7 @@ class FirestoreStore(Store):
 
     def list_expired_leases(self, now, limit):
         query = self._db.collection("tasks").where(
-            filter=FieldFilter("leaseExpiresAt", "<", now)
+            filter=FieldFilter("leaseExpiresAt", "<=", now)
         )
         return [_with_id(s) for s in query.limit(limit).stream()]
 

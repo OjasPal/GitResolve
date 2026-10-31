@@ -23,7 +23,8 @@ def test_json_log_redacts_secrets_in_messages_and_extras():
     assert "ghp_" not in out and "Bearer abc" not in out
 
 
-def test_json_format_is_automatic_in_production_only():
+def test_json_format_is_automatic_in_production_only(monkeypatch):
+    monkeypatch.delenv("LOG_FORMAT", raising=False)
     assert Settings(environment="production", _env_file=None).log_json is True
     assert Settings(environment="local", _env_file=None).log_json is False
     assert Settings(environment="local", log_format="json", _env_file=None).log_json is True

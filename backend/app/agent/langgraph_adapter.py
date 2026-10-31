@@ -65,6 +65,7 @@ class LangGraphAgentRunner:
             "status": "planning",
             "error": None,
         }
+        ctx.usage(modelCalls=1)
         result = self._graph.invoke(state)
         if result["status"] == "failed":
             return PlanResult(

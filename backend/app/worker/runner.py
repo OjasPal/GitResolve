@@ -17,8 +17,9 @@ from app.core.logging import configure_logging
 from app.core.redaction import redact
 from app.schemas.enums import DispatchPhase, FailureCode
 from app.services.store import build_store
+from app.services.ids import sha256_hash
 from app.services.transitions import LeaseLost, artifact_path
-from app.services.worker_service import ClaimedJob, WorkerService
+from app.services.worker_service import ClaimedJob, WorkerService, ExecutionLimit
 from app.worker.context import CancelRequested, JobContext
 from app.worker.pr import PullRequestCreator, PullRequestError
 
@@ -38,6 +39,14 @@ class _HeartbeatThread(threading.Thread):
         while not self._halt.wait(self._interval):
             try:
                 self._svc.heartbeat(self._task_id, self._worker_id)
+            except ExecutionLimit as exc:
+                try:
+                    task = self._svc.store.get(f"tasks/{self._task_id}")
+                    self._svc.fail(self._task_id, self._worker_id, exc.code,
+                                   "Task execution limit reached.", DispatchPhase(task["dispatchPhase"]))
+                except LeaseLost:
+                    pass
+                return
             except LeaseLost:
                 return
             except Exception:  # transient store errors: retry next tick
@@ -90,6 +99,9 @@ class Worker:
                 self._execute(job, ctx)
             else:
                 self._create_pr(job)
+        except ExecutionLimit as exc:
+            self._safely(lambda: self.service.fail(job.task_id, self.worker_id, exc.code,
+                                                 "Task execution limit reached.", job.phase))
         except CancelRequested:
             self._safely(lambda: self.service.mark_cancelled(job.task_id, self.worker_id))
         except LeaseLost:
@@ -124,6 +136,7 @@ class Worker:
 
     def _plan(self, job: ClaimedJob, ctx: JobContext) -> None:
         result = self.agent.plan(self._agent_task(job), ctx)
+        ctx.checkpoint()
         if result.outcome == "ready" and result.plan is not None:
             self.service.complete_plan(job.task_id, self.worker_id, result.plan)
         elif result.outcome == "needs_input":
@@ -140,6 +153,7 @@ class Worker:
 
     def _execute(self, job: ClaimedJob, ctx: JobContext) -> None:
         result = self.agent.execute(self._agent_task(job), ctx)
+        ctx.checkpoint()
         if result.outcome == "fix_ready" and result.final_diff:
             self.service.complete_execution(
                 job.task_id, self.worker_id, result.final_diff, result.final_tests, result.summary
@@ -156,6 +170,16 @@ class Worker:
         artifact = self.service.store.get(artifact_path(job.task_id, "final_diff"))
         if artifact is None:
             raise PullRequestError(FailureCode.INTERNAL_ERROR, "Approved diff artifact is missing.")
+        approval = task.get("approval") or {}
+        actual_hash = sha256_hash(artifact["content"])
+        if (
+            approval.get("state") != "approved"
+            or approval.get("diffHash") != actual_hash
+            or task.get("finalDiffHash") != actual_hash
+            or artifact.get("truncated")
+        ):
+            raise PullRequestError(FailureCode.INTERNAL_ERROR, "Stored diff does not match the approved diff.")
+        self.service.heartbeat(job.task_id, self.worker_id)
         pr = self.pr_creator.create(task, artifact["content"])
         self.service.complete_pr(job.task_id, self.worker_id, pr.number, pr.url, pr.branch)
 

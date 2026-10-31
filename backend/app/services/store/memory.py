@@ -115,7 +115,7 @@ class MemoryStore(Store):
             rows = [
                 t
                 for t in self._tasks()
-                if t.get("leaseExpiresAt") is not None and t["leaseExpiresAt"] < now
+                if t.get("leaseExpiresAt") is not None and t["leaseExpiresAt"] <= now
             ]
             return rows[:limit]
 

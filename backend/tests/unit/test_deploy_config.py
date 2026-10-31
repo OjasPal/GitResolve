@@ -1,6 +1,7 @@
 """Guards against drift between the deployment files and the application settings."""
 
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -77,10 +78,22 @@ def test_firestore_rules_deny_all_client_access():
     assert "allow read, write: if false" in rules and "if true" not in rules
 
 
-@pytest.mark.skipif(subprocess.run(["which", "bash"], capture_output=True).returncode != 0, reason="bash not available")
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
 def test_bash_scripts_have_valid_syntax():
     for script in ("setup.sh", "deploy.sh"):
-        assert subprocess.run(["bash", "-n", str(DEPLOY / script)], capture_output=True).returncode == 0
+        result = subprocess.run(
+            [shutil.which("bash"), "-n"], input=(DEPLOY / script).read_text().encode(),
+            capture_output=True, timeout=30,
+        )
+        assert result.returncode == 0, result.stderr.decode(errors="replace")
+
+
+def test_docker_copy_sources_exist_in_backend_context():
+    backend = DEPLOY.parent
+    for line in (backend / "Dockerfile").read_text().splitlines():
+        if line.startswith("COPY "):
+            for source in line.split()[1:-1]:
+                assert (backend / source).exists(), source
 
 
 def test_worker_production_check_does_not_need_session_or_oauth_secrets():

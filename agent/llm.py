@@ -26,7 +26,7 @@ def analyze_issue_with_gemini(
         )
 
     model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=60_000))
 
     prompt = f"""
 You are the issue-analysis component of GitResolve, an AI coding agent.
