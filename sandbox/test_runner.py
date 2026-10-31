@@ -111,12 +111,14 @@ def test_failing_tests(fixture_repo):
 
 @needs_docker
 def test_timeout_kills_and_cleans_up(fixture_repo):
+    before = set(_leftover_containers())
     result = run_sandbox(
         _request(fixture_repo, PYTEST + ["test_hang.py"], timeout_seconds=5), allow_local_repo=True
     )
     assert result.status == "timed_out"
     assert result.timed_out
-    assert _leftover_containers() == []
+    assert result.cleanup_ok
+    assert set(_leftover_containers()) <= before
 
 
 @needs_docker
@@ -147,3 +149,44 @@ def test_network_is_blocked(fixture_repo):
     result = run_sandbox(_request(fixture_repo, command), allow_local_repo=True)
     assert result.status == "failed"
     assert "URLError" in result.stderr
+
+
+@needs_docker
+def test_patch_is_applied_only_inside_container(fixture_repo):
+    from pathlib import Path
+    patch = "--- a/test_fail.py\n+++ b/test_fail.py\n@@ -1,2 +1,2 @@\n def test_bad():\n-    assert 1 + 1 == 3\n+    assert 1 + 1 == 2\n"
+    result = run_sandbox(_request(fixture_repo, PYTEST + ["test_fail.py"], patch=patch), allow_local_repo=True)
+    assert result.status == "passed" and result.cleanup_ok
+    assert "== 3" in (Path(fixture_repo[0]) / "test_fail.py").read_text()
+
+
+@needs_docker
+def test_mount_permissions_and_storage_bound(fixture_repo):
+    script = """import os
+from pathlib import Path
+assert os.getuid() == 10001
+Path('/workspace/writable').write_text('yes')
+for path in ('/input/newfile', '/usr/newfile'):
+    try:
+        Path(path).write_text('no')
+    except OSError:
+        pass
+    else:
+        raise AssertionError(path)
+space = os.statvfs('/workspace')
+assert space.f_blocks * space.f_frsize <= 1024 ** 3
+status = Path('/proc/self/status').read_text()
+assert 'NoNewPrivs:\\t1' in status
+assert 'CapEff:\\t0000000000000000' in status
+"""
+    result = run_sandbox(_request(fixture_repo, ["python", "-c", script]), allow_local_repo=True)
+    assert result.status == "passed", result.model_dump()
+
+
+@needs_docker
+def test_cancellation_cleans_container(fixture_repo):
+    import time
+    started = time.monotonic()
+    result = run_sandbox(_request(fixture_repo, PYTEST + ["test_hang.py"]), allow_local_repo=True,
+                         cancel=lambda: time.monotonic() - started > 3)
+    assert result.error_code == "cancelled" and result.cleanup_ok

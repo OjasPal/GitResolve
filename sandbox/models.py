@@ -2,16 +2,18 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ExecutionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
     execution_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
     repo_url: str = Field(min_length=1, max_length=500)
     commit_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
     command: list[str] = Field(min_length=1, max_length=20)
     timeout_seconds: int = Field(default=60, ge=1, le=300)
     max_output_bytes: int = Field(default=1_000_000, ge=1_000, le=1_048_576)
+    patch: str = Field(default="", max_length=100_000)
 
     @field_validator("repo_url")
     @classmethod
@@ -46,3 +48,6 @@ class ExecutionResult(BaseModel):
     commit_sha: str | None = None
     error_code: str | None = None
     error_message: str | None = None
+    cleanup_ok: bool = True
+    # Rotation happens before capture, so capture flags cannot prove completeness.
+    logs_complete: bool = False
