@@ -280,7 +280,7 @@ function TaskDetailsContent() {
                 Pull Request Result
               </h3>
               <p className="text-xs text-slate-300 mt-0.5">
-                Branch: <span className="font-mono text-emerald-400">{task.pr.branch}</span> · All sandbox tests verified.
+                Branch: <span className="font-mono text-emerald-400">{task.pr.branch}</span> · Review the recorded test evidence below.
               </p>
             </div>
           </div>
