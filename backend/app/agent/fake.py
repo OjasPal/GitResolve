@@ -63,5 +63,6 @@ class FakeAgentRunner:
             final_diff=_DIFF,
             final_tests="before: 1 failed, 12 passed\nafter: 0 failed, 13 passed\n",
             verification={"reproduced": True, "regressionPassed": True, "testsRun": 13, "newFailures": []},
-            summary={"filesChanged": 1, "linesAdded": 1, "linesRemoved": 1, "files": ["src/slugify.py"]},
+            summary={"filesChanged": 2, "linesAdded": 4, "linesRemoved": 1,
+                     "files": ["src/slugify.py", "tests/test_slugify_regression.py"]},
         )

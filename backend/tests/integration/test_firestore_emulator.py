@@ -13,7 +13,7 @@ from app.services.store.firestore import FirestoreStore
 
 EMULATOR_HOST = os.getenv("FIRESTORE_EMULATOR_HOST")
 pytestmark = pytest.mark.skipif(
-    not EMULATOR_HOST,
+    not (EMULATOR_HOST or "").startswith(("localhost:", "127.0.0.1:")),
     reason="Set FIRESTORE_EMULATOR_HOST to run Firestore emulator integration tests.",
 )
 

@@ -3,6 +3,7 @@
 import importlib
 import math
 import sys
+import time
 from pathlib import Path
 
 from app.schemas.enums import FailureCode
@@ -20,7 +21,7 @@ def execute(ctx, *, commit_sha: str, command: list[str], patch: str = ""):
     remaining = min(
         (task["deadlineAt"] - ctx._svc.clock()).total_seconds(),
         task["limits"]["taskTimeoutSeconds"] - task["budgets"]["execSeconds"],
-        task["limits"]["executionTimeoutSeconds"],
+        task["limits"]["executionTimeoutSeconds"], 300,
     )
     if remaining < 1:
         raise ExecutionLimit(FailureCode.TIMEOUT)
@@ -36,9 +37,16 @@ def execute(ctx, *, commit_sha: str, command: list[str], patch: str = ""):
         commit_sha=commit_sha, command=command, timeout_seconds=math.floor(remaining), patch=patch,
     )
     stopped = []
+    next_check = 0.0
     def cancel():
+        nonlocal next_check
+        if stopped:
+            return True
+        if time.monotonic() < next_check:
+            return False
         try:
             ctx.checkpoint()
+            next_check = time.monotonic() + 1.0
             return False
         except Exception as exc:
             stopped.append(exc)
@@ -46,6 +54,8 @@ def execute(ctx, *, commit_sha: str, command: list[str], patch: str = ""):
     result = runner.run_sandbox(request, cancel=cancel)
     if stopped:
         raise stopped[0]
+    if not result.cleanup_ok:
+        raise RuntimeError(result.error_message or "Sandbox cleanup failed.")
     ctx.checkpoint()
     ctx.usage(execSeconds=task["budgets"]["execSeconds"] + result.duration_ms / 1000)
     return result

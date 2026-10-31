@@ -13,7 +13,10 @@ def validate_fix(diff: str, limits: dict, evidence: dict, base_sha: str | None) 
     paths = []
     previous = None
     changes = 0
+    git_paths = None
     for line in diff.splitlines():
+        if line.startswith("diff --git "):
+            git_paths = line[len("diff --git "):].split(" ")
         if line.startswith(("old mode", "new mode", "deleted file mode", "rename ", "copy ", "GIT binary", "Binary files")):
             raise ValueError("Unsupported file operation.")
         if line.startswith("new file mode") and line != "new file mode 100644":
@@ -25,10 +28,12 @@ def validate_fix(diff: str, limits: dict, evidence: dict, base_sha: str | None) 
             if not target.startswith("b/") or previous not in ("/dev/null", "a/" + target[2:]):
                 raise ValueError("Deletion, rename or malformed diff header.")
             name = target[2:]
+            if git_paths is not None and git_paths != ["a/" + name, "b/" + name]:
+                raise ValueError("Conflicting diff paths.")
             path = PurePosixPath(name)
             if (not name or path.is_absolute() or ".." in path.parts or "\\" in name or ":" in name
                     or any(c.isspace() for c in name)
-                    or any(p.startswith((".git", ".env")) for p in path.parts)
+                    or any(p.casefold().startswith((".git", ".env")) for p in path.parts)
                     or path.name in {"pyproject.toml", "setup.py", "setup.cfg", "Dockerfile", "Jenkinsfile", "Makefile"}
                     or path.suffix in {".lock", ".yaml", ".yml"}
                     or path.name.startswith("requirements")):
