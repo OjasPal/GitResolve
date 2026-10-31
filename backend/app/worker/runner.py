@@ -38,7 +38,9 @@ class _HeartbeatThread(threading.Thread):
     def run(self) -> None:
         while not self._halt.wait(self._interval):
             try:
-                self._svc.heartbeat(self._task_id, self._worker_id)
+                if self._svc.heartbeat(self._task_id, self._worker_id):
+                    self._svc.mark_cancelled(self._task_id, self._worker_id)
+                    return
             except ExecutionLimit as exc:
                 try:
                     task = self._svc.store.get(f"tasks/{self._task_id}")
@@ -79,20 +81,22 @@ class Worker:
         self.process(job)
         return True
 
-    def run_forever(self) -> None:
+    def run_forever(self, stop: threading.Event | None = None) -> None:
+        stop = stop or threading.Event()
         last_reap = 0.0
-        while True:
+        while not stop.is_set():
             if time.monotonic() - last_reap >= self.settings.reaper_interval_seconds:
                 self.service.reap_expired()
                 last_reap = time.monotonic()
             if not self.run_once():
-                time.sleep(self.settings.poll_interval_seconds)
+                stop.wait(self.settings.poll_interval_seconds)
 
     def process(self, job: ClaimedJob) -> None:
         beat = _HeartbeatThread(self.service, job.task_id, self.worker_id, self.settings.heartbeat_seconds)
         beat.start()
         ctx = JobContext(self.service, job.task_id, self.worker_id)
         try:
+            ctx.checkpoint()
             if job.phase == DispatchPhase.PLAN:
                 self._plan(job, ctx)
             elif job.phase == DispatchPhase.EXECUTE:
@@ -118,6 +122,7 @@ class Worker:
             )
         finally:
             beat.stop()
+            beat.join(timeout=2)
 
     def _safely(self, fn) -> None:
         try:
@@ -156,7 +161,7 @@ class Worker:
         ctx.checkpoint()
         if result.outcome == "fix_ready" and result.final_diff:
             self.service.complete_execution(
-                job.task_id, self.worker_id, result.final_diff, result.final_tests, result.summary
+                job.task_id, self.worker_id, result.final_diff, result.final_tests, result.summary, result.verification
             )
         else:
             self.service.fail(

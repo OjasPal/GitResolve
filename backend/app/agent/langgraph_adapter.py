@@ -73,14 +73,13 @@ class LangGraphAgentRunner:
                 failure_code=FailureCode.LLM_UNAVAILABLE,
                 failure_message=result.get("error") or "Issue analysis failed.",
             )
-        # Known gap: the prototype graph drops `needs_more_information` and
-        # `questions_for_reporter`, so `needs_input` cannot be produced yet.
         return PlanResult(
-            "ready",
+            "needs_input" if result.get("needs_more_information") else "ready",
             plan=PlanData(
                 problem_summary=result["problem_summary"],
                 steps=result["plan"],
                 likely_files=result.get("likely_files", []),
+                questions=result.get("questions_for_reporter", []),
             ),
         )
 

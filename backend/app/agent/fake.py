@@ -9,10 +9,16 @@ SCENARIOS = {"success", "needs_input", "plan_failed", "not_reproduced", "no_fix"
 
 _DIFF = """--- a/src/slugify.py
 +++ b/src/slugify.py
-@@ -1,3 +1,3 @@
+@@ -1,2 +1,2 @@
  def slugify(text):
 -    return re.sub(r"[^a-z0-9]+", "-", text.lower())
 +    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+--- /dev/null
++++ b/tests/test_slugify_regression.py
+@@ -0,0 +1,3 @@
++from src.slugify import slugify
++def test_trailing_hyphen():
++    assert slugify('Hello!') == 'hello'
 """
 
 
@@ -38,7 +44,7 @@ class FakeAgentRunner:
         return PlanResult("ready", plan=plan)
 
     def execute(self, task: AgentTask, ctx: JobContext) -> ExecuteResult:
-        ctx.stage(TaskStage.SETUP)
+        ctx.stage(TaskStage.SETUP, baseSha="a" * 40)
         ctx.stage(TaskStage.BASELINE, baseline={"ran": 12, "failed": 0})
         ctx.stage(TaskStage.LOCATE)
         ctx.stage(TaskStage.REPRODUCE, reproduction={"outcome": "reproduced"})
@@ -56,5 +62,6 @@ class FakeAgentRunner:
             "fix_ready",
             final_diff=_DIFF,
             final_tests="before: 1 failed, 12 passed\nafter: 0 failed, 13 passed\n",
+            verification={"reproduced": True, "regressionPassed": True, "testsRun": 13, "newFailures": []},
             summary={"filesChanged": 1, "linesAdded": 1, "linesRemoved": 1, "files": ["src/slugify.py"]},
         )

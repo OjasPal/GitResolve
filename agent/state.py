@@ -15,6 +15,8 @@ class AgentState(TypedDict):
     problem_summary: str
     likely_files: list[str]
     plan: list[str]
+    needs_more_information: bool
+    questions_for_reporter: list[str]
 
     repair_attempts: int
     max_repair_attempts: int

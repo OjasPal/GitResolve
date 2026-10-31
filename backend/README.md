@@ -32,6 +32,22 @@ Never mount the Docker socket in a repository execution container.
 Run `python -m pytest -q -ra` here; set FIRESTORE_EMULATOR_HOST to include
 Firestore integration tests. No production deployment is implied by unit tests.
 
+Run `python -m app.demo --mock-llm` for an asynchronous API/real-graph smoke
+demonstration without provider costs. Omit the flag to use Gemini. The mock
+flag replaces only the provider call, not the graph or worker.
+
+Agent nodes may use `ctx.execute(commit_sha=..., command=[...], patch=...)`
+after the sandbox branch is integrated. The adapter binds the repository to
+the task, caps execution by the remaining budget, and propagates cancellation
+and lost leases. It does not generate patches or interpret process success as
+a correct fix. Return ExecuteResult.verification with reproduced,
+regressionPassed, testsRun and newFailures; finalization also requires a pinned
+baseSha and a bounded diff containing a regression test. These are trusted
+agent evidence fields, not model confidence flags.
+
+Internal dailyQuota counters on users are transactional and are not exposed
+in API responses. Existing user documents bootstrap from their task history.
+
 Usage counters are cumulative and monotonic. Agent code must checkpoint between
 operations, reserve/report model calls, and pass remaining time/cancellation to
 execution tools. The Gemini client has a 60-second request timeout. Python

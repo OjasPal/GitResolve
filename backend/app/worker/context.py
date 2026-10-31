@@ -4,11 +4,7 @@ from typing import Any
 
 from app.schemas.enums import ArtifactType, EventLevel, EventType, TaskStage
 from app.services.transitions import EventSpec, LeaseLost
-from app.services.worker_service import WorkerService
-
-
-class CancelRequested(Exception):
-    """The user asked to cancel; the agent should stop and let the worker clean up."""
+from app.services.worker_service import WorkerService, CancelRequested
 
 
 class JobContext:
@@ -45,6 +41,10 @@ class JobContext:
         self._svc.update_progress(
             self.task_id, self.worker_id, attempts_used=attempts_used, budgets=budgets or None
         )
+
+    def execute(self, *, commit_sha: str, command: list[str], patch: str = ""):
+        from app.worker.sandbox import execute
+        return execute(self, commit_sha=commit_sha, command=command, patch=patch)
 
 
 __all__ = ["CancelRequested", "JobContext", "LeaseLost"]

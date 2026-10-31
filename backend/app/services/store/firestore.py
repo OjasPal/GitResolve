@@ -75,7 +75,7 @@ class FirestoreStore(Store):
         )
         if after_task_id:
             anchor = self._db.collection("tasks").document(after_task_id).get()
-            if not anchor.exists:
+            if not anchor.exists or anchor.to_dict().get("userId") != user_id:
                 return []
             query = query.start_after(anchor)
         return [_with_id(s) for s in query.limit(limit).stream()]

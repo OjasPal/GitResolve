@@ -43,12 +43,20 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        stop = threading.Event()
+        thread = None
         if settings.embedded_worker and settings.environment in ("local", "test"):
             from app.worker.runner import build_worker
 
             worker = build_worker(settings, store)
-            threading.Thread(target=worker.run_forever, name="embedded-worker", daemon=True).start()
-        yield
+            thread = threading.Thread(target=worker.run_forever, args=(stop,), name="embedded-worker", daemon=True)
+            thread.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            if thread is not None:
+                thread.join(timeout=2)
 
     app = FastAPI(
         title="GitResolve API",

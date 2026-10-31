@@ -41,6 +41,10 @@ MAX_ARTIFACTS_PER_TASK = 20
 PLAN_MAX_BYTES = 8 * 1024
 
 
+class CancelRequested(Exception):
+    pass
+
+
 class ExecutionLimit(Exception):
     def __init__(self, code: FailureCode):
         self.code = code
@@ -69,7 +73,7 @@ class WorkerService:
         self.clock = clock
 
     # --- Internals ----------------------------------------------------------------
-    def _owned(self, txn: Txn, task_id: str, worker_id: str) -> Ctx:
+    def _owned(self, txn: Txn, task_id: str, worker_id: str, *, stopping: bool = False) -> Ctx:
         try:
             ctx = read_ctx(txn, task_id)
         except Exception:
@@ -79,6 +83,11 @@ class WorkerService:
         expires = ctx.task.get("leaseExpiresAt")
         if expires is None or expires <= self.clock():
             raise LeaseLost(task_id)
+        if not stopping:
+            if ctx.task.get("cancelRequested"):
+                raise CancelRequested(task_id)
+            if ctx.task.get("deadlineAt") and self.clock() >= ctx.task["deadlineAt"]:
+                raise ExecutionLimit(FailureCode.TIMEOUT)
         return ctx
 
     def _lease_updates(self, now: datetime, worker_id: str) -> dict[str, Any]:
@@ -103,6 +112,12 @@ class WorkerService:
         if not task.get("dispatchPending") or task.get("leaseOwner"):
             return None
         phase = DispatchPhase(task["dispatchPhase"])
+        if task.get("deadlineAt") and now >= task["deadlineAt"]:
+            apply_change(txn, ctx, self.settings, now, to_status=TaskStatus.TIMED_OUT,
+                         updates={"dispatchPending": False, "dispatchPhase": None,
+                                  "failure": {"code": "timeout", "message": "Task deadline expired before dispatch.",
+                                              "phase": phase.value, "retryable": True}})
+            return None
         status = TaskStatus(task["status"])
         expected = {
             DispatchPhase.PLAN: TaskStatus.QUEUED,
@@ -133,7 +148,7 @@ class WorkerService:
         now = self.clock()
 
         def fn(txn: Txn) -> bool:
-            ctx = self._owned(txn, task_id, worker_id)
+            ctx = self._owned(txn, task_id, worker_id, stopping=True)
             if ctx.task.get("deadlineAt") and now >= ctx.task["deadlineAt"]:
                 raise ExecutionLimit(FailureCode.TIMEOUT)
             txn.update(f"tasks/{task_id}", self._lease_updates(now, worker_id))
@@ -170,6 +185,8 @@ class WorkerService:
             for key, value in (budgets or {}).items():
                 if key not in ctx.task["budgets"] or type(value) not in (int, float) or not math.isfinite(value):
                     raise ValueError("Invalid usage counter.")
+                if key != "execSeconds" and type(value) is not int:
+                    raise ValueError("Call and token counters must be integers.")
                 if value < ctx.task["budgets"][key]:
                     raise ValueError("Usage counters must be monotonic.")
                 cap = {"modelCalls": limits["maxModelCalls"], "execSeconds": limits["taskTimeoutSeconds"]}.get(key)
@@ -259,7 +276,7 @@ class WorkerService:
 
     def complete_execution(
         self, task_id: str, worker_id: str, final_diff: str, final_tests: str,
-        summary: dict[str, Any],
+        summary: dict[str, Any], verification: dict[str, Any] | None = None,
     ) -> Doc:
         """Store the validated diff and move to `awaiting_approval`.
 
@@ -272,6 +289,11 @@ class WorkerService:
             ctx = self._owned(txn, task_id, worker_id)
             diff_doc = self._artifact_doc(ctx.task, "final_diff", ArtifactType.FINAL_DIFF, final_diff, None, now)
             tests_doc = self._artifact_doc(ctx.task, "final_tests", ArtifactType.FINAL_TESTS, final_tests, None, now)
+            from app.services.policy import validate_fix
+            try:
+                validate_fix(final_diff, ctx.task["limits"], verification or {}, ctx.task.get("baseSha"))
+            except ValueError as exc:
+                raise ExecutionLimit(FailureCode.POLICY_VIOLATION) from exc
             if diff_doc["truncated"]:
                 raise ValueError("final_diff exceeds the artifact size limit.")
             txn.set(artifact_path(task_id, "final_diff"), diff_doc)
@@ -322,7 +344,7 @@ class WorkerService:
         target = status_for_failure(code)
 
         def fn(txn: Txn) -> Doc:
-            ctx = self._owned(txn, task_id, worker_id)
+            ctx = self._owned(txn, task_id, worker_id, stopping=True)
             updates: dict[str, Any] = {
                 "failure": {
                     "code": code.value,
@@ -347,7 +369,7 @@ class WorkerService:
         now = self.clock()
 
         def fn(txn: Txn) -> Doc:
-            ctx = self._owned(txn, task_id, worker_id)
+            ctx = self._owned(txn, task_id, worker_id, stopping=True)
             return apply_change(
                 txn, ctx, self.settings, now,
                 to_status=TaskStatus.CANCELLED,

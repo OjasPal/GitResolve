@@ -48,6 +48,8 @@ def create_plan(state: AgentState) -> dict:
     return {
         "problem_summary": analysis.problem_summary,
         "plan": analysis.investigation_steps,
+        "needs_more_information": analysis.needs_more_information,
+        "questions_for_reporter": analysis.questions_for_reporter,
         "stage": "awaiting_start",
         "status": "awaiting_start",
         "error": None,

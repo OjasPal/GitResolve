@@ -186,7 +186,8 @@ class TaskService:
 
         now = self.clock()
         midnight = datetime.combine(now.date(), time.min, tzinfo=timezone.utc)
-        if self.store.count_user_tasks_since(user_id, midnight) >= self.settings.max_tasks_per_day:
+        historical_count = self.store.count_user_tasks_since(user_id, midnight)
+        if historical_count >= self.settings.max_tasks_per_day:
             raise ApiError(
                 429,
                 "daily_limit_reached",
@@ -275,6 +276,11 @@ class TaskService:
                 holder = txn.get(task_path(holder_id))
                 if holder is not None and is_active(holder["status"]):
                     raise active_slot_error(holder_id)
+            quota = (user or {}).get("dailyQuota", {})
+            used = quota.get("used", 0) if quota.get("day") == now.date().isoformat() else historical_count
+            if used >= s.max_tasks_per_day:
+                raise ApiError(429, "daily_limit_reached", "Daily task limit reached.")
+            daily_quota = {"day": now.date().isoformat(), "used": used + 1}
             txn.create(task_path(task_id), doc)
             txn.create(event_path(task_id, 1), first_event)
             if user is None:
@@ -286,13 +292,14 @@ class TaskService:
                         "avatarUrl": None,
                         "installationIds": [],
                         "activeTaskId": task_id,
+                        "dailyQuota": daily_quota,
                         "createdAt": now,
                         "lastLoginAt": now,
                         "schemaVersion": 1,
                     },
                 )
             else:
-                txn.update(user_path(user_id), {"activeTaskId": task_id})
+                txn.update(user_path(user_id), {"activeTaskId": task_id, "dailyQuota": daily_quota})
             return doc, True
 
         try:
@@ -322,7 +329,7 @@ class TaskService:
                     "dispatchPending": True,
                     "dispatchPhase": DispatchPhase.EXECUTE.value,
                     "dispatchAt": now,
-                    "deadlineAt": now + timedelta(seconds=self.settings.task_timeout_seconds),
+                    "deadlineAt": now + timedelta(seconds=ctx.task["limits"]["taskTimeoutSeconds"]),
                     "cancelRequested": False,
                 },
                 events=[EventSpec(EventType.APPROVAL, "Plan approved; repair started.")],
@@ -394,6 +401,7 @@ class TaskService:
                     "dispatchPending": True,
                     "dispatchPhase": DispatchPhase.PR.value,
                     "dispatchAt": now,
+                    "deadlineAt": now + timedelta(seconds=task["limits"]["taskTimeoutSeconds"]),
                     "failure": None,
                     "finishedAt": None,
                     "cancelRequested": False,
