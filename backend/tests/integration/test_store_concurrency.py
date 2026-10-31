@@ -17,7 +17,7 @@ def test_concurrent_create_claim_and_approval(backend):
         if not host.startswith(("127.0.0.1:", "localhost:")):
             pytest.skip("A loopback Firestore emulator is required.")
         from app.services.store.firestore import FirestoreStore
-        env.store = FirestoreStore(project="demo-gitresolve")
+        env.store = FirestoreStore(project=f"demo-gr-{uuid.uuid4().hex[:12]}")
         env.worker_service.store = env.store
         env.app.state.task_service.store = env.store
     user = str(uuid.uuid4().int)[:18]

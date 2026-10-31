@@ -85,10 +85,16 @@ class Worker:
         stop = stop or threading.Event()
         last_reap = 0.0
         while not stop.is_set():
-            if time.monotonic() - last_reap >= self.settings.reaper_interval_seconds:
-                self.service.reap_expired()
-                last_reap = time.monotonic()
-            if not self.run_once():
+            try:
+                if time.monotonic() - last_reap >= self.settings.reaper_interval_seconds:
+                    self.service.reap_expired()
+                    last_reap = time.monotonic()
+                if not self.run_once():
+                    stop.wait(self.settings.poll_interval_seconds)
+            except Exception:
+                # Store outages must not silently kill an embedded worker. A job
+                # whose final write failed retains its lease for safe reaping.
+                log.exception("worker iteration failed; retrying after poll interval")
                 stop.wait(self.settings.poll_interval_seconds)
 
     def process(self, job: ClaimedJob) -> None:

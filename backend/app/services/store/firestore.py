@@ -1,12 +1,14 @@
 """Firestore implementation of the store (server SDK, Native mode).
 
-NOTE: exercised by unit tests only through `MemoryStore`. Run the same suite
-against the Firestore emulator before relying on it (see backend/README.md).
+Lifecycle and concurrency tests also run against an opt-in local emulator
+(see backend/README.md). Production IAM/indexes need deployment validation.
 """
 
 from collections.abc import Callable
 from datetime import datetime
 from typing import TypeVar
+import random
+import time
 
 from google.api_core import exceptions as gexc
 from google.cloud import firestore
@@ -55,10 +57,20 @@ class FirestoreStore(Store):
         def _run(transaction: firestore.Transaction) -> T:
             return fn(_FsTxn(self._db, transaction))
 
-        try:
-            return _run(self._db.transaction())
-        except gexc.AlreadyExists as exc:
-            raise AlreadyExists(str(exc)) from exc
+        # Start fresh after contention with jitter. Immediate simultaneous retries
+        # can repeatedly deadlock on the task/user pair (also in the emulator).
+        # The callback is transactional and must have no external side effects.
+        for attempt in range(4):
+            try:
+                return _run(self._db.transaction(max_attempts=1))
+            except gexc.AlreadyExists as exc:
+                raise AlreadyExists(str(exc)) from exc
+            except (gexc.Aborted, ValueError) as exc:
+                if not isinstance(exc, gexc.Aborted) and not isinstance(exc.__cause__, gexc.Aborted):
+                    raise
+                if attempt == 3:
+                    raise
+                time.sleep(random.uniform(0.05, 0.2) * (2 ** attempt))
 
     def get(self, path: str) -> Doc | None:
         snap = self._db.document(path).get()

@@ -6,6 +6,7 @@ the task document inside one transaction (Backend Schema, section 5).
 """
 
 import json
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
@@ -115,6 +116,7 @@ def build_event(task: Doc, seq: int, stage: str, spec: EventSpec, now: datetime,
         key: redact(value, 200) if isinstance(value, str) else value
         for key, value in spec.data.items()
         if key in allowed and isinstance(value, (str, int, float, bool, type(None)))
+        and (not isinstance(value, float) or math.isfinite(value))
     }
     if len(json.dumps(data, default=str).encode()) > EVENT_DATA_MAX_BYTES:
         data = {"truncated": True}
