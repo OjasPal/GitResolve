@@ -24,7 +24,6 @@ export default function TasksPage() {
 
   const loadTasks = async () => {
     try {
-      setLoading(true);
       await ensureDevAuthenticated();
       const res = await listTasks(50);
       setTasks(res.items || []);
@@ -36,7 +35,13 @@ export default function TasksPage() {
   };
 
   useEffect(() => {
-    loadTasks();
+    let active = true;
+    ensureDevAuthenticated().then(() => listTasks(50)).then((res) => {
+      if (active) { setTasks(res.items || []);  }
+    }).catch((err: unknown) => {
+      if (active) {  }
+    }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, []);
 
   const filteredTasks = tasks.filter((t) => {
@@ -72,7 +77,7 @@ export default function TasksPage() {
 
         <div className="flex items-center gap-2.5">
           <button
-            onClick={loadTasks}
+            onClick={() => { setLoading(true); void loadTasks(); }}
             className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white text-xs font-semibold cursor-pointer"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />

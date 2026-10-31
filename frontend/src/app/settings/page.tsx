@@ -6,7 +6,6 @@ import {
   clearAuthToken,
   getAuthToken,
   getMe,
-  getStoredUser,
   loginWithDevToken,
 } from "@/lib/api";
 import { MeResponse } from "@/types";
@@ -33,12 +32,15 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(false);
 
   const sync = async () => {
-    checkBackendHealth().then(setBackendHealth);
+    const health = await checkBackendHealth();
+    setBackendHealth(health);
     const token = getAuthToken();
     if (token) {
       try {
         const u = await getMe();
         setUser(u);
+        setDevUserId(u.id);
+        setDevLogin(u.githubLogin);
       } catch {
         setUser(null);
       }
@@ -48,12 +50,14 @@ export default function SettingsPage() {
   };
 
   useEffect(() => {
-    const stored = getStoredUser();
-    if (stored) {
-      setDevUserId(stored.userId);
-      setDevLogin(stored.githubLogin);
+    let active = true;
+    checkBackendHealth().then((health) => { if (active) setBackendHealth(health); });
+    if (getAuthToken()) {
+      getMe().then((profile) => {
+        if (active) { setUser(profile); setDevUserId(profile.id); setDevLogin(profile.githubLogin); }
+      }).catch(() => { if (active) setUser(null); });
     }
-    sync();
+    return () => { active = false; };
   }, []);
 
   const handleDevLogin = async (e: React.FormEvent) => {
@@ -107,7 +111,7 @@ export default function SettingsPage() {
             <div>
               <h3 className="text-sm font-bold text-white">Backend API Server</h3>
               <p className="text-xs text-slate-400 font-mono">
-                {process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8001/api/v1"}
+                {process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000/api/v1"}
               </p>
 
             </div>

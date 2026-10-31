@@ -27,7 +27,6 @@ export default function RepositoriesPage() {
 
   const loadRepos = async () => {
     try {
-      setLoading(true);
       await ensureDevAuthenticated();
       const res = await listRepositories();
       setRepositories(res.items || []);
@@ -42,7 +41,13 @@ export default function RepositoriesPage() {
   };
 
   useEffect(() => {
-    loadRepos();
+    let active = true;
+    ensureDevAuthenticated().then(() => listRepositories()).then((res) => {
+      if (active) { setRepositories(res.items || []); if (res.items?.length) setSelectedRepo(res.items[0].id); }
+    }).catch((err: unknown) => {
+      if (active) {  }
+    }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, []);
 
   useEffect(() => {
@@ -76,7 +81,7 @@ export default function RepositoriesPage() {
         </div>
 
         <button
-          onClick={loadRepos}
+          onClick={() => { setLoading(true); void loadRepos(); }}
           className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white text-xs font-semibold cursor-pointer shrink-0"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />

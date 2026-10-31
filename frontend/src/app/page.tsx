@@ -29,8 +29,6 @@ export default function DashboardPage() {
 
   const fetchTasks = async () => {
     try {
-      setLoading(true);
-      setError(null);
       await ensureDevAuthenticated();
       const res = await listTasks(50);
       setTasks(res.items || []);
@@ -46,7 +44,13 @@ export default function DashboardPage() {
   };
 
   useEffect(() => {
-    fetchTasks();
+    let active = true;
+    ensureDevAuthenticated().then(() => listTasks(50)).then((res) => {
+      if (active) { setTasks(res.items || []);  }
+    }).catch((err: unknown) => {
+      if (active) { setError(err instanceof Error ? err.message : "Unable to load tasks."); }
+    }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, []);
 
   // Compute metrics
@@ -92,7 +96,7 @@ export default function DashboardPage() {
               <span>New Repair Task</span>
             </Link>
             <button
-              onClick={fetchTasks}
+              onClick={() => { setLoading(true); setError(null); void fetchTasks(); }}
               className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 text-slate-200 font-medium text-sm transition-all cursor-pointer"
               title="Refresh task list"
             >
@@ -188,7 +192,7 @@ export default function DashboardPage() {
             <span>{error}</span>
           </div>
           <button
-            onClick={fetchTasks}
+            onClick={() => { setLoading(true); setError(null); void fetchTasks(); }}
             className="text-xs underline hover:text-white"
           >
             Retry Connection

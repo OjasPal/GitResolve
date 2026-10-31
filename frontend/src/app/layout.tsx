@@ -34,6 +34,7 @@ export default function RootLayout({
         <Suspense fallback={<div className="h-16 border-b border-slate-900 bg-slate-950" />}>
           <Navbar />
         </Suspense>
+        <p className="text-center text-xs text-amber-300 p-2">Development prototype: repair execution and GitHub App publishing are not yet implemented.</p>
         <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
           {children}
         </main>

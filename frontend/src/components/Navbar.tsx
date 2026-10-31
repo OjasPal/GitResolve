@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/navigation";
 import { usePathname } from "next/navigation";
 import NextLink from "next/link";
 import {
@@ -70,6 +69,11 @@ export function Navbar() {
     syncAuth();
 
     const handleAuthChange = () => {
+      if (!getAuthToken()) {
+        setTokenPresent(false);
+        setUser(null);
+        return;
+      }
       syncAuth();
     };
 
@@ -162,7 +166,7 @@ export function Navbar() {
               title={
                 backendStatus === "ok"
                   ? "Backend is connected & healthy"
-                  : "Backend disconnected - check port 8001"
+                  : "Backend disconnected - check backend connection"
               }
 
             >

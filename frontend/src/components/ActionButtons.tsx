@@ -8,10 +8,11 @@ import { AlertTriangle, CheckCircle, GitPullRequest, Loader2, Play, RefreshCw, X
 
 interface ActionButtonsProps {
   task: TaskResponse;
+  reviewedDiffHash: string | null;
   onActionSuccess: (updatedTask: TaskResponse) => void;
 }
 
-export function ActionButtons({ task, onActionSuccess }: ActionButtonsProps) {
+export function ActionButtons({ task, reviewedDiffHash, onActionSuccess }: ActionButtonsProps) {
   const router = useRouter();
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -32,8 +33,8 @@ export function ActionButtons({ task, onActionSuccess }: ActionButtonsProps) {
   };
 
   const handleApprove = async () => {
-    if (!task.finalDiffHash) {
-      setError("Cannot approve: Final diff hash is missing from task data.");
+    if (!task.finalDiffHash || reviewedDiffHash !== task.finalDiffHash) {
+      setError("Open and review the complete current diff before approving.");
       return;
     }
     try {
@@ -126,7 +127,7 @@ export function ActionButtons({ task, onActionSuccess }: ActionButtonsProps) {
         {actions.includes("approve") && (
           <button
             onClick={handleApprove}
-            disabled={!!loadingAction}
+            disabled={!!loadingAction || reviewedDiffHash !== task.finalDiffHash}
             className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-sm transition-all shadow-md shadow-emerald-900/40 disabled:opacity-50 cursor-pointer"
           >
             {loadingAction === "approve" ? (
@@ -174,7 +175,7 @@ export function ActionButtons({ task, onActionSuccess }: ActionButtonsProps) {
         {actions.includes("retry_pr") && (
           <button
             onClick={handleApprove}
-            disabled={!!loadingAction}
+            disabled={!!loadingAction || reviewedDiffHash !== task.finalDiffHash}
             className="flex items-center gap-2 px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-medium text-sm transition-all disabled:opacity-50 cursor-pointer"
           >
             {loadingAction === "approve" ? (

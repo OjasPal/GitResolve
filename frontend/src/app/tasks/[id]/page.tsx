@@ -1,9 +1,10 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
+  ensureDevAuthenticated,
   getArtifact,
   getTask,
   listArtifacts,
@@ -52,6 +53,7 @@ function TaskDetailsContent() {
   const [artifacts, setArtifacts] = useState<ArtifactSummary[]>([]);
   const [activeTab, setActiveTab] = useState<"plan" | "diff" | "tests" | "events">("plan");
 
+  const [loadedDiffHash, setLoadedDiffHash] = useState<string | null>(null);
   const [diffContent, setDiffContent] = useState<string>("");
   const [testContent, setTestContent] = useState<string>("");
   const [loadingContent, setLoadingContent] = useState<boolean>(false);
@@ -64,17 +66,18 @@ function TaskDetailsContent() {
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
 
   // 1. Initial Load of Task & Events
-  const fetchTaskDetails = async (isInitial = false) => {
+  const fetchTaskDetails = useCallback(async (isInitial = false) => {
     try {
       if (isInitial) setLoading(true);
       setError(null);
+      await ensureDevAuthenticated();
       const taskData = await getTask(taskId);
       setTask(taskData);
 
       // Auto-switch tabs based on lifecycle state
-      if (taskData.status === "awaiting_approval" || taskData.status === "completed") {
+      if (isInitial && (taskData.status === "awaiting_approval" || taskData.status === "completed")) {
         setActiveTab("diff");
-      } else if (taskData.status === "running") {
+      } else if (isInitial && taskData.status === "running") {
         setActiveTab("events");
       }
 
@@ -86,7 +89,10 @@ function TaskDetailsContent() {
       const diffArt = artList.items.find((a) => a.id === "final_diff" || a.type === "final_diff");
       if (diffArt) {
         getArtifact(taskId, diffArt.id)
-          .then((v) => setDiffContent(v.content))
+          .then((v) => {
+            setDiffContent(v.content);
+            setLoadedDiffHash(v.truncated ? null : `sha256:${v.sha256}`);
+          })
           .catch(() => {});
       }
 
@@ -105,10 +111,10 @@ function TaskDetailsContent() {
     } finally {
       if (isInitial) setLoading(false);
     }
-  };
+  }, [taskId]);
 
   // 2. Incremental Event Stream Polling
-  const pollEvents = async () => {
+  const pollEvents = useCallback(async () => {
     try {
       const res = await listEvents(taskId, nextAfterRef.current, 50);
       if (res.items && res.items.length > 0) {
@@ -122,7 +128,7 @@ function TaskDetailsContent() {
     } catch {
       // transient network error
     }
-  };
+  }, [taskId]);
 
   // Setup initial load and dynamic polling loop
   useEffect(() => {
@@ -158,7 +164,7 @@ function TaskDetailsContent() {
       mounted = false;
       if (pollingRef.current) clearInterval(pollingRef.current);
     };
-  }, [taskId]);
+  }, [taskId, task?.status, fetchTaskDetails, pollEvents]);
 
   // Tab switch loader
   const handleTabChange = async (tab: "plan" | "diff" | "tests" | "events") => {
@@ -170,6 +176,7 @@ function TaskDetailsContent() {
         try {
           const v = await getArtifact(taskId, diffArt.id);
           setDiffContent(v.content);
+          setLoadedDiffHash(v.truncated ? null : `sha256:${v.sha256}`);
         } catch {}
         setLoadingContent(false);
       }
@@ -239,6 +246,7 @@ function TaskDetailsContent() {
         <div className="shrink-0">
           <ActionButtons
             task={task}
+            reviewedDiffHash={activeTab === "diff" ? loadedDiffHash : null}
             onActionSuccess={(updated) => {
               setTask(updated);
               fetchTaskDetails(false);
@@ -269,7 +277,7 @@ function TaskDetailsContent() {
             </div>
             <div>
               <h3 className="text-sm font-bold text-emerald-200">
-                Pull Request Created on GitHub!
+                Pull Request Result
               </h3>
               <p className="text-xs text-slate-300 mt-0.5">
                 Branch: <span className="font-mono text-emerald-400">{task.pr.branch}</span> · All sandbox tests verified.
@@ -311,7 +319,7 @@ function TaskDetailsContent() {
               Human Gate 1: Investigation Plan Ready
             </p>
             <p className="text-xs text-purple-300/80 mt-0.5">
-              Review Gemini's proposed investigation steps below. When ready, click "Start Repair" to clone the repository into the Docker sandbox and execute reproductions.
+              Review the proposed investigation steps below. Repair execution still requires the Agent Lead LangGraph implementation.
             </p>
           </div>
         </div>
@@ -325,7 +333,7 @@ function TaskDetailsContent() {
               Human Gate 2: Code Diff & Test Verification Ready
             </p>
             <p className="text-xs text-emerald-300/80 mt-0.5">
-              The Docker sandbox reproduced the bug and verified the patch. Inspect the proposed diff below and approve to publish the branch and pull request.
+              Inspect the complete proposed diff and test evidence before approving. Local fixture results do not represent real repository repairs.
             </p>
           </div>
         </div>

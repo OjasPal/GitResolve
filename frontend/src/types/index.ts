@@ -177,8 +177,8 @@ export interface TaskResponse {
   finalDiffHash?: string | null;
   finalDiffSummary?: {
     filesChanged?: number;
-    insertions?: number;
-    deletions?: number;
+    linesAdded?: number;
+    linesRemoved?: number;
   } | null;
   approval?: Approval | null;
   failure?: Failure | null;
