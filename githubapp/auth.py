@@ -3,9 +3,6 @@
 import time
 
 import jwt  # PyJWT[crypto]
-import requests
-
-API = "https://api.github.com"
 
 
 class GitHubAuth:
@@ -32,15 +29,10 @@ class GitHubAuth:
             body["repositories"] = repositories
         if permissions:
             body["permissions"] = permissions
-        res = requests.post(
-            f"{API}/app/installations/{int(installation_id)}/access_tokens",
-            headers={
-                "Authorization": f"Bearer {self._generate_jwt()}",
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
-            json=body or None,
-            timeout=15,
-        )
-        res.raise_for_status()
-        return res.json()["token"]
+        from githubapp.client import GitHubClient, GitHubClientError
+        try:
+            client = GitHubClient(self._generate_jwt())
+            return client.request("POST", f"/app/installations/{int(installation_id)}/access_tokens",
+                                  json=body or None)["token"]
+        except (ValueError, KeyError, jwt.PyJWTError):
+            raise GitHubClientError("github_auth_error") from None
