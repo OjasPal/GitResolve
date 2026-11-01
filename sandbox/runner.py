@@ -40,7 +40,7 @@ def _docker_run_args(container: str, repo_dir: Path, command: list[str], patch_p
         "--memory", "2g", "--memory-swap", "2g", "--cpus", "2", "--pids-limit", "256",
         "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m,uid=10001,gid=10001",
         "--tmpfs", "/workspace:rw,nosuid,nodev,size=1g,uid=10001,gid=10001",
-        "--log-driver", "json-file", "--log-opt", "max-size=1m", "--log-opt", "max-file=1",
+        "--log-driver", "json-file", "--log-opt", "max-size=20m", "--log-opt", "max-file=1",
         "--mount", f"type=bind,source={repo_dir},target=/input,readonly",
         "-e", "HOME=/tmp", "--workdir", "/workspace",
     ]
@@ -88,12 +88,20 @@ def run_sandbox(request: ExecutionRequest, allow_local_repo: bool = False, cance
         result.exit_code = state["ExitCode"]
         result.oom_killed = bool(state["OOMKilled"])
         logs = capture(["docker", "logs", container], deadline, cancel, request.max_output_bytes)
+
         if logs.returncode:
             raise SandboxError("logs_failed", "Execution logs could not be retrieved.")
-        result.stdout, _ = _clean_output(logs.stdout, request.max_output_bytes)
-        result.stderr, _ = _clean_output(logs.stderr, request.max_output_bytes)
-        result.stdout_truncated = logs.stdout_truncated
-        result.stderr_truncated = logs.stderr_truncated
+
+        result.stdout, stdout_clean_truncated = _clean_output(
+            logs.stdout, request.max_output_bytes
+        )
+        result.stderr, stderr_clean_truncated = _clean_output(
+            logs.stderr, request.max_output_bytes
+        )
+
+        result.stdout_truncated = logs.stdout_truncated or stdout_clean_truncated
+        result.stderr_truncated = logs.stderr_truncated or stderr_clean_truncated
+
         if result.oom_killed:
             result.error_code = "oom_killed"
             result.error_message = "Container exceeded its memory budget."
