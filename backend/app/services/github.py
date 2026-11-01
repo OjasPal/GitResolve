@@ -6,7 +6,8 @@ user's installations, and read an issue snapshot. The real implementation
 """
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Protocol, Callable
+from pathlib import Path
 
 
 class GitHubUnavailable(Exception):
@@ -60,6 +61,15 @@ class GitHubGateway(Protocol):
 
     def get_issue(self, user_id: str, repo_id: str, number: int) -> IssueInfo | None:
         """None when the issue does not exist or is not open."""
+
+
+class WorkerGitHubGateway(GitHubGateway, Protocol):
+    """Host-only repository access. Agent nodes receive no credential strings."""
+    def resolve(self, task: dict) -> str:
+        """Authorize the task owner and return the current default-branch SHA."""
+
+    def source(self, task: dict) -> Callable[..., Path]:
+        """Return a bounded, cancellation-aware snapshot acquisition callback."""
 
 
 class FakeGitHubGateway:

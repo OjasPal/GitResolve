@@ -52,6 +52,7 @@ class LangGraphAgentRunner:
         ctx.checkpoint()
         state = {
             "task_id": task.task_id,
+            "base_sha": task.base_sha,
             "repo_full_name": task.repo_full_name,
             "issue_number": int(task.issue["number"]),
             "issue_title": task.issue.get("title") or "",
@@ -66,7 +67,9 @@ class LangGraphAgentRunner:
             "error": None,
         }
         ctx.usage(modelCalls=1)
-        result = self._graph.invoke(state)
+        with ctx.repository() as repo_path:
+            state["repo_path"] = str(repo_path) if repo_path else None
+            result = self._graph.invoke(state)
         if result["status"] == "failed":
             return PlanResult(
                 "failed",

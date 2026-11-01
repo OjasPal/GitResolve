@@ -17,13 +17,15 @@ processes require STORE_BACKEND=firestore and configured ADC or an emulator.
 5. Real LangGraph planning ends at awaiting_start. POST `/start` currently
    produces a clear failed_infra result because agent repair is not implemented.
 
-The repository/issue gateway is a local fixture, not GitHub integration.
+GITHUB_MODE=fixture uses the local repository/issue fixture. For real GitHub
+App configuration, see [GitHub integration](../docs/GITHUB_INTEGRATION.md).
 AGENT_MODE=fake is explicitly a lifecycle test fixture; it is not a real repair.
-Production continues to fail closed without real GitHub providers.
+GITHUB_MODE=real constructs the App repository and OAuth providers; it disables
+dev-token sign-in and requires a strong session secret.
 
 ## Images and validation
 
-API: `docker build -f backend/Dockerfile backend`.
+API: `docker build -f backend/Dockerfile .`.
 Worker: `docker build -f backend/Worker.Dockerfile .` from repository root.
 The worker image includes the agent but does not provide a Docker daemon.
 Use the host worker for sandbox execution until Docker transport is configured.
@@ -37,7 +39,7 @@ demonstration without provider costs. Omit the flag to use Gemini. The mock
 flag replaces only the provider call, not the graph or worker.
 
 Agent nodes may use `ctx.execute(commit_sha=..., command=[...], patch=...)`
-after the sandbox branch is integrated. The adapter binds the repository to
+for sandbox execution. The adapter binds the repository to
 the task, caps execution by the remaining budget, and propagates cancellation
 and lost leases. It does not generate patches or interpret process success as
 a correct fix. Return ExecuteResult.verification with reproduced,

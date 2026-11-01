@@ -1,0 +1,14 @@
+**
+!backend/
+!backend/pyproject.toml
+!backend/Dockerfile
+!backend/Worker.Dockerfile
+!backend/app/
+!backend/app/**
+!githubapp/
+!githubapp/*.py
+!agent/
+!agent/*.py
+!sandbox/
+!sandbox/*.py
+**/__pycache__/**

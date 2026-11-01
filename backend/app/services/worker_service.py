@@ -157,6 +157,13 @@ class WorkerService:
         return self.store.run_transaction(fn)
 
     # --- Progress -----------------------------------------------------------------------
+    def record_sandbox(self, task_id, worker_id, receipt):
+        """Only the trusted execution bridge records actual Docker evidence."""
+        def fn(txn):
+            self._owned(txn, task_id, worker_id)
+            txn.update(f"tasks/{task_id}", {"sandboxVerification": receipt})
+        self.store.run_transaction(fn)
+
     def update_progress(
         self,
         task_id: str,
@@ -296,6 +303,13 @@ class WorkerService:
                 raise ExecutionLimit(FailureCode.POLICY_VIOLATION) from exc
             if diff_doc["truncated"]:
                 raise ValueError("final_diff exceeds the artifact size limit.")
+            if self.settings.github_mode == "real":
+                receipt = ctx.task.get("sandboxVerification") or {}
+                if (receipt.get("source") != "docker" or receipt.get("passed") is not True
+                        or receipt.get("diffHash") != sha256_hash(diff_doc["content"])
+                        or receipt.get("baseSha") != ctx.task.get("baseSha")
+                        or type(receipt.get("testsRun")) is not int or receipt["testsRun"] <= 0):
+                    raise ExecutionLimit(FailureCode.POLICY_VIOLATION)
             txn.set(artifact_path(task_id, "final_diff"), diff_doc)
             txn.set(artifact_path(task_id, "final_tests"), tests_doc)
             return apply_change(
@@ -305,6 +319,8 @@ class WorkerService:
                 updates={
                     "finalDiffHash": sha256_hash(diff_doc["content"]),
                     "finalDiffSummary": summary,
+                    "verification": {key: (verification or {}).get(key) for key in
+                                     ("reproduced", "regressionPassed", "testsRun", "newFailures")},
                     "approval": {"state": ApprovalState.PENDING.value, "by": None, "at": None, "diffHash": None},
                     "dispatchPhase": None,
                     **release_lease(),

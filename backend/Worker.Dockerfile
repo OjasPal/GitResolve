@@ -4,6 +4,8 @@ WORKDIR /opt/gitresolve/backend
 COPY backend/pyproject.toml ./
 COPY backend/app ./app
 COPY agent /opt/gitresolve/agent
+COPY githubapp /opt/gitresolve/githubapp
+COPY sandbox /opt/gitresolve/sandbox
 RUN pip install --no-cache-dir '.[firestore,agent]' \
     && useradd --create-home --uid 10001 worker
 USER 10001

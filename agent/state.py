@@ -1,5 +1,5 @@
 
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, NotRequired
 
 
 class AgentState(TypedDict):
@@ -10,6 +10,12 @@ class AgentState(TypedDict):
     issue_number: int
     issue_title: str
     issue_body: str
+
+    base_sha: NotRequired[str | None]
+    repo_path: NotRequired[str | None]
+    pr_url: NotRequired[str]
+    pr_branch: NotRequired[str]
+    pr_number: NotRequired[int]
 
     stage: str
     problem_summary: str

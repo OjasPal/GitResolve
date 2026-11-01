@@ -7,3 +7,9 @@
 !agent/
 !agent/*.py
 **/__pycache__
+
+!backend/Dockerfile
+!githubapp/
+!githubapp/*.py
+!sandbox/
+!sandbox/*.py

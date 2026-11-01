@@ -88,12 +88,12 @@ def test_bash_scripts_have_valid_syntax():
         assert result.returncode == 0, result.stderr.decode(errors="replace")
 
 
-def test_docker_copy_sources_exist_in_backend_context():
+def test_docker_copy_sources_exist_in_repository_context():
     backend = DEPLOY.parent
     for line in (backend / "Dockerfile").read_text().splitlines():
         if line.startswith("COPY "):
             for source in line.split()[1:-1]:
-                assert (backend / source).exists(), source
+                assert (backend.parent / source).exists(), source
 
 
 def test_worker_production_check_does_not_need_session_or_oauth_secrets():

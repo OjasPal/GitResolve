@@ -221,3 +221,13 @@ __marimo__/
 
 .idea/
 .pytest_cache/
+# GitHub App keys and local credentials (any subsystem).
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+*credentials*.json
+*service-account*.json

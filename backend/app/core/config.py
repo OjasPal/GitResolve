@@ -33,15 +33,18 @@ class Settings(BaseSettings):
     firestore_database: str = "(default)"
 
     # --- GitHub App (secrets are supplied by env/Secret Manager) ------------
+    github_mode: Literal["fixture", "real"] = "fixture"
+    github_installation_id: int | None = None
+    github_app_private_key_path: str | None = None
     github_app_id: int | None = None
     github_app_client_id: str | None = None
-    github_app_client_secret: str | None = None
-    github_app_private_key: str | None = None
+    github_app_client_secret: str | None = Field(default=None, repr=False)
+    github_app_private_key: str | None = Field(default=None, repr=False)
     github_app_callback_url: str = "http://localhost:8000/api/v1/auth/github/callback"
     frontend_base_url: str = "http://localhost:3000"
 
     # --- Auth ---------------------------------------------------------------
-    session_jwt_secret: str = Field(default="dev-only-insecure-secret-change-me-32b")
+    session_jwt_secret: str = Field(default="dev-only-insecure-secret-change-me-32b", repr=False)
     jwt_algorithm: str = "HS256"
     jwt_ttl_minutes: int = 60
 
@@ -69,7 +72,18 @@ class Settings(BaseSettings):
     task_retention_days: int = 90
     subdoc_retention_days: int = 30
 
+    def assert_github_configuration(self) -> None:
+        if self.github_mode != "real":
+            return
+        if not self.github_app_id or not (self.github_app_private_key or self.github_app_private_key_path):
+            raise RuntimeError("Real GitHub mode requires App ID and a private key or key path.")
+        if self.session_jwt_secret.startswith("dev-only") or len(self.session_jwt_secret) < 32:
+            raise RuntimeError("Real GitHub mode requires a strong SESSION_JWT_SECRET.")
+
     def assert_safe_for_production(self) -> None:
+        self.assert_github_configuration()
+        if self.github_mode == "real" and not (self.github_app_client_id and self.github_app_client_secret):
+            raise RuntimeError("Real GitHub API requires OAuth client ID and client secret.")
         if self.environment != "production":
             return
         if self.session_jwt_secret.startswith("dev-only") or len(
@@ -83,7 +97,7 @@ class Settings(BaseSettings):
                 self.github_app_id,
                 self.github_app_client_id,
                 self.github_app_client_secret,
-                self.github_app_private_key,
+                self.github_app_private_key or self.github_app_private_key_path,
             )
         ):
             raise RuntimeError("GitHub App configuration is required in production.")
@@ -102,7 +116,7 @@ class Settings(BaseSettings):
             return
         if self.store_backend != "firestore" or not self.gcp_project:
             raise RuntimeError("Production worker requires STORE_BACKEND=firestore and GCP_PROJECT.")
-        if not (self.github_app_id and self.github_app_private_key):
+        if not (self.github_app_id and (self.github_app_private_key or self.github_app_private_key_path)):
             raise RuntimeError("Production worker requires GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY.")
 
     @property

@@ -130,7 +130,7 @@ export async function loginWithDevToken(
   githubLogin = "dev_user"
 ): Promise<TokenResponse> {
   if (process.env.NODE_ENV === "production" && process.env.NEXT_PUBLIC_ENABLE_DEV_AUTH !== "true") {
-    throw new ApiError("GitHub sign-in is not implemented yet. Development login is disabled.", "auth_unavailable", 403);
+    throw new ApiError("Development login is disabled. Sign in with GitHub.", "auth_unavailable", 403);
   }
   const data = await request<TokenResponse>("/auth/dev-token", {
     method: "POST",

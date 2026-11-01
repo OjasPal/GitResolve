@@ -7,7 +7,7 @@ from app.schemas.common import RequestModel, ResponseModel
 from app.schemas.enums import ArtifactType, EventLevel, EventType, TaskStage
 
 ARTIFACT_ID_PATTERN = (
-    r"^(plan|repro_test|final_diff|final_tests|attempt_\d{3}_(diff|tests))$"
+    r"^(plan|repro_test|final_diff|final_tests|github_pr|attempt_\d{3}_(diff|tests))$"
 )
 
 

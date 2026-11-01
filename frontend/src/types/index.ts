@@ -86,7 +86,8 @@ export type ArtifactType =
   | "attempt_diff"
   | "attempt_tests"
   | "final_diff"
-  | "final_tests";
+  | "final_tests"
+  | "pr_result";
 
 export interface PlanData {
   problemSummary: string;

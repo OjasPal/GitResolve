@@ -15,7 +15,8 @@ from app.agent.interface import AgentRunner, AgentTask
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.core.redaction import redact
-from app.schemas.enums import DispatchPhase, FailureCode
+from app.schemas.enums import DispatchPhase, FailureCode, TaskStage, EventType, ArtifactType
+from app.services.github import WorkerGitHubGateway
 from app.services.store import build_store
 from app.services.ids import sha256_hash
 from app.services.transitions import LeaseLost, artifact_path
@@ -66,7 +67,9 @@ class Worker:
         pr_creator: PullRequestCreator,
         settings: Settings,
         worker_id: str | None = None,
+        github: WorkerGitHubGateway | None = None,
     ) -> None:
+        self.github = github
         self.service = service
         self.agent = agent
         self.pr_creator = pr_creator
@@ -100,7 +103,7 @@ class Worker:
     def process(self, job: ClaimedJob) -> None:
         beat = _HeartbeatThread(self.service, job.task_id, self.worker_id, self.settings.heartbeat_seconds)
         beat.start()
-        ctx = JobContext(self.service, job.task_id, self.worker_id)
+        ctx = JobContext(self.service, job.task_id, self.worker_id, self.github)
         try:
             ctx.checkpoint()
             if job.phase == DispatchPhase.PLAN:
@@ -119,6 +122,14 @@ class Worker:
         except PullRequestError as exc:
             self._safely(lambda: self.service.fail(job.task_id, self.worker_id, exc.code, exc.message, job.phase))
         except Exception as exc:
+            from app.services.github import GitHubUnavailable
+            from githubapp.client import GitHubClientError
+            if isinstance(exc, (GitHubUnavailable, GitHubClientError)):
+                code = getattr(exc, "code", str(exc))
+                failure = FailureCode(code) if code in {c.value for c in FailureCode} else FailureCode.GITHUB_ERROR
+                self._safely(lambda: self.service.fail(job.task_id, self.worker_id, failure,
+                                                      "GitHub operation failed.", job.phase))
+                return
             log.exception("job failed", extra={"task_id": job.task_id})
             message = redact(f"{type(exc).__name__}: {exc}", 400)
             self._safely(
@@ -146,6 +157,10 @@ class Worker:
         )
 
     def _plan(self, job: ClaimedJob, ctx: JobContext) -> None:
+        if self.github is not None:
+            job.task["baseSha"] = self.github.resolve(job.task)
+            ctx.stage(TaskStage.PLAN, baseSha=job.task["baseSha"])
+            ctx.event(EventType.TOOL_CALL, "GitHub repository access verified and base commit pinned.")
         result = self.agent.plan(self._agent_task(job), ctx)
         ctx.checkpoint()
         if result.outcome == "ready" and result.plan is not None:
@@ -191,7 +206,20 @@ class Worker:
         ):
             raise PullRequestError(FailureCode.INTERNAL_ERROR, "Stored diff does not match the approved diff.")
         self.service.heartbeat(job.task_id, self.worker_id)
-        pr = self.pr_creator.create(task, artifact["content"])
+        if self.github is not None:
+            from agent.publication import build_publication_graph
+            ctx = JobContext(self.service, job.task_id, self.worker_id, self.github)
+            def publish():
+                return self.pr_creator.create(task, artifact["content"], checkpoint=ctx.checkpoint,
+                    event=lambda message: ctx.event(EventType.TOOL_CALL, message))
+            published = build_publication_graph(publish).invoke({"task_id": job.task_id})
+            from app.worker.pr import PullRequestResult
+            pr = PullRequestResult(published["pr_number"], published["pr_url"], published["pr_branch"])
+            import json
+            ctx.artifact("github_pr", ArtifactType.PR_RESULT, json.dumps({
+                "number": pr.number, "url": pr.url, "branch": pr.branch}))
+        else:
+            pr = self.pr_creator.create(task, artifact["content"])
         self.service.complete_pr(job.task_id, self.worker_id, pr.number, pr.url, pr.branch)
 
 
@@ -210,13 +238,21 @@ def build_worker(
         from app.agent.fake import FakeAgentRunner
 
         agent = FakeAgentRunner()
+    github = None
+    if settings.github_mode == "real":
+        if settings.agent_mode != "langgraph":
+            raise RuntimeError("Real GitHub mode requires AGENT_MODE=langgraph; fixture repair cannot publish.")
+        from app.services.github_real import RealGitHubGateway
+        from app.worker.github_pr import GitHubPullRequestCreator
+        github = RealGitHubGateway(settings, store)
+        pr_creator = pr_creator or GitHubPullRequestCreator(github)
     if pr_creator is None:
         if settings.environment == "production":
             raise RuntimeError("Production worker requires a real PR creator.")
         from app.worker.pr import FakePullRequestCreator
 
         pr_creator = FakePullRequestCreator()
-    return Worker(WorkerService(store, settings), agent, pr_creator, settings)
+    return Worker(WorkerService(store, settings), agent, pr_creator, settings, github=github)
 
 
 def main() -> None:

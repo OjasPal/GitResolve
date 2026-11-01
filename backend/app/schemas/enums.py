@@ -104,6 +104,7 @@ class ArtifactType(StrEnum):
     ATTEMPT_TESTS = "attempt_tests"
     FINAL_DIFF = "final_diff"
     FINAL_TESTS = "final_tests"
+    PR_RESULT = "pr_result"
 
 
 class Action(StrEnum):

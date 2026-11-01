@@ -54,7 +54,7 @@ def _force_remove(func, path, _exc):
     func(path)
 
 
-def run_sandbox(request: ExecutionRequest, allow_local_repo: bool = False, cancel=None) -> ExecutionResult:
+def run_sandbox(request: ExecutionRequest, allow_local_repo: bool = False, cancel=None, *, source_provider=None) -> ExecutionResult:
     started = time.monotonic()
     deadline = started + request.timeout_seconds
     container = f"gitresolve-{request.execution_id}-{uuid.uuid4().hex[:8]}"
@@ -66,7 +66,8 @@ def run_sandbox(request: ExecutionRequest, allow_local_repo: bool = False, cance
         if request.patch:
             validate_patch(request.patch)
         workspace = Path(tempfile.mkdtemp(prefix="gitresolve_"))
-        repo = acquire(request, workspace, deadline, cancel, allow_local_repo)
+        repo = (source_provider(request, workspace, deadline, cancel) if source_provider
+                else acquire(request, workspace, deadline, cancel, allow_local_repo))
         patch_path = None
         if request.patch:
             patch_path = workspace / "patch.diff"
