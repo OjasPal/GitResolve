@@ -89,12 +89,20 @@ def run_sandbox(request: ExecutionRequest, allow_local_repo: bool = False, cance
         result.exit_code = state["ExitCode"]
         result.oom_killed = bool(state["OOMKilled"])
         logs = capture(["docker", "logs", container], deadline, cancel, request.max_output_bytes)
+
         if logs.returncode:
             raise SandboxError("logs_failed", "Execution logs could not be retrieved.")
-        result.stdout, stdout_trimmed = _clean_output(logs.stdout, request.max_output_bytes)
-        result.stderr, stderr_trimmed = _clean_output(logs.stderr, request.max_output_bytes)
-        result.stdout_truncated = logs.stdout_truncated or stdout_trimmed
-        result.stderr_truncated = logs.stderr_truncated or stderr_trimmed
+
+        result.stdout, stdout_clean_truncated = _clean_output(
+            logs.stdout, request.max_output_bytes
+        )
+        result.stderr, stderr_clean_truncated = _clean_output(
+            logs.stderr, request.max_output_bytes
+        )
+
+        result.stdout_truncated = logs.stdout_truncated or stdout_clean_truncated
+        result.stderr_truncated = logs.stderr_truncated or stderr_clean_truncated
+
         if result.oom_killed:
             result.error_code = "oom_killed"
             result.error_message = "Container exceeded its memory budget."
