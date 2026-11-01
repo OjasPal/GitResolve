@@ -21,7 +21,7 @@ trap 'rm -f "$RENDERED"' EXIT
 sed "s|\"AUTO\"|\"$URL/api/v1/auth/github/callback\"|" "$ENV_FILE" > "$RENDERED"
 
 echo "== Building $IMAGE"
-gcloud builds submit "$BACKEND" --project "$PROJECT" --tag "$IMAGE" --quiet
+gcloud builds submit "$(dirname "$BACKEND")" --project "$PROJECT" --config "$HERE/cloudbuild.yaml" --substitutions "_IMAGE=$IMAGE" --quiet
 
 echo "== Deploying $SERVICE"
 gcloud run deploy "$SERVICE" --project "$PROJECT" --region "$REGION" --image "$IMAGE" --quiet \

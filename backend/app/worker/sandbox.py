@@ -51,11 +51,38 @@ def execute(ctx, *, commit_sha: str, command: list[str], patch: str = ""):
         except Exception as exc:
             stopped.append(exc)
             return True  # store outages must stop execution too
-    result = runner.run_sandbox(request, cancel=cancel)
+    kwargs = {}
+    source_errors = []
+    if ctx.github is not None:
+        provider = ctx.github.source(task)
+        def source(*args):
+            try:
+                path = provider(*args)
+                from app.schemas.enums import EventType
+                ctx.event(EventType.TOOL_CALL, "Pinned GitHub snapshot acquired for sandbox execution.")
+                return path
+            except Exception as exc:
+                source_errors.append(exc)
+                raise
+        kwargs["source_provider"] = source
+    result = runner.run_sandbox(request, cancel=cancel, **kwargs)
     if stopped:
         raise stopped[0]
     if not result.cleanup_ok:
         raise RuntimeError(result.error_message or "Sandbox cleanup failed.")
+    if source_errors:
+        raise source_errors[0]
     ctx.checkpoint()
     ctx.usage(execSeconds=task["budgets"]["execSeconds"] + result.duration_ms / 1000)
+    import re
+    from app.services.ids import sha256_hash
+    ctx._svc.record_sandbox(ctx.task_id, ctx.worker_id, {
+        "source": "docker", "baseSha": commit_sha, "diffHash": sha256_hash(patch),
+        "command": command, "passed": result.status == "passed" and result.exit_code == 0
+            and not result.oom_killed and result.cleanup_ok,
+        "executionId": result.execution_id,
+        "testsRun": sum(int(n) for n in re.findall(r"\b(\d+) passed\b", result.stdout))
+                    if command[:3] == ["python", "-m", "pytest"]
+                    and not any(arg in {"--collect-only", "--co", "--version", "--help", "-h"} for arg in command) else 0,
+    })
     return result

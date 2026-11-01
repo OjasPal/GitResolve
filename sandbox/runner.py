@@ -40,7 +40,7 @@ def _docker_run_args(container: str, repo_dir: Path, command: list[str], patch_p
         "--memory", "2g", "--memory-swap", "2g", "--cpus", "2", "--pids-limit", "256",
         "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m,uid=10001,gid=10001",
         "--tmpfs", "/workspace:rw,nosuid,nodev,size=1g,uid=10001,gid=10001",
-        "--log-driver", "json-file", "--log-opt", "max-size=1m", "--log-opt", "max-file=1",
+        "--log-driver", "json-file", "--log-opt", "max-size=20m", "--log-opt", "max-file=1",
         "--mount", f"type=bind,source={repo_dir},target=/input,readonly",
         "-e", "HOME=/tmp", "--workdir", "/workspace",
     ]
@@ -54,7 +54,7 @@ def _force_remove(func, path, _exc):
     func(path)
 
 
-def run_sandbox(request: ExecutionRequest, allow_local_repo: bool = False, cancel=None) -> ExecutionResult:
+def run_sandbox(request: ExecutionRequest, allow_local_repo: bool = False, cancel=None, *, source_provider=None) -> ExecutionResult:
     started = time.monotonic()
     deadline = started + request.timeout_seconds
     container = f"gitresolve-{request.execution_id}-{uuid.uuid4().hex[:8]}"
@@ -66,7 +66,8 @@ def run_sandbox(request: ExecutionRequest, allow_local_repo: bool = False, cance
         if request.patch:
             validate_patch(request.patch)
         workspace = Path(tempfile.mkdtemp(prefix="gitresolve_"))
-        repo = acquire(request, workspace, deadline, cancel, allow_local_repo)
+        repo = (source_provider(request, workspace, deadline, cancel) if source_provider
+                else acquire(request, workspace, deadline, cancel, allow_local_repo))
         patch_path = None
         if request.patch:
             patch_path = workspace / "patch.diff"
@@ -90,10 +91,10 @@ def run_sandbox(request: ExecutionRequest, allow_local_repo: bool = False, cance
         logs = capture(["docker", "logs", container], deadline, cancel, request.max_output_bytes)
         if logs.returncode:
             raise SandboxError("logs_failed", "Execution logs could not be retrieved.")
-        result.stdout, _ = _clean_output(logs.stdout, request.max_output_bytes)
-        result.stderr, _ = _clean_output(logs.stderr, request.max_output_bytes)
-        result.stdout_truncated = logs.stdout_truncated
-        result.stderr_truncated = logs.stderr_truncated
+        result.stdout, stdout_trimmed = _clean_output(logs.stdout, request.max_output_bytes)
+        result.stderr, stderr_trimmed = _clean_output(logs.stderr, request.max_output_bytes)
+        result.stdout_truncated = logs.stdout_truncated or stdout_trimmed
+        result.stderr_truncated = logs.stderr_truncated or stderr_trimmed
         if result.oom_killed:
             result.error_code = "oom_killed"
             result.error_message = "Container exceeded its memory budget."

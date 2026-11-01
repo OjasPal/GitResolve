@@ -2,13 +2,15 @@
 
 from typing import Any
 
+from app.services.github import WorkerGitHubGateway
 from app.schemas.enums import ArtifactType, EventLevel, EventType, TaskStage
 from app.services.transitions import EventSpec, LeaseLost
 from app.services.worker_service import WorkerService, CancelRequested
 
 
 class JobContext:
-    def __init__(self, service: WorkerService, task_id: str, worker_id: str):
+    def __init__(self, service: WorkerService, task_id: str, worker_id: str, github: WorkerGitHubGateway | None = None):
+        self.github = github
         self._svc = service
         self.task_id = task_id
         self.worker_id = worker_id
@@ -41,6 +43,37 @@ class JobContext:
         self._svc.update_progress(
             self.task_id, self.worker_id, attempts_used=attempts_used, budgets=budgets or None
         )
+
+    def repository(self):
+        """Temporary inert checkout for investigation; never execute code here."""
+        from contextlib import contextmanager
+        @contextmanager
+        def checkout():
+            if self.github is None:
+                yield None
+                return
+            import tempfile
+            import time
+            from pathlib import Path
+            from types import SimpleNamespace
+            task = self._svc.store.get(f"tasks/{self.task_id}")
+            self.checkpoint()
+            with tempfile.TemporaryDirectory(prefix="gitresolve-investigate-") as directory:
+                request = SimpleNamespace(repo_url=f"https://github.com/{task['repoFullName']}",
+                                          commit_sha=task['baseSha'])
+                deadline = time.monotonic() + min(60, (task['deadlineAt'] - self._svc.clock()).total_seconds())
+                next_check = 0.0
+                def cancel():
+                    nonlocal next_check
+                    if time.monotonic() >= next_check:
+                        self.checkpoint()
+                        next_check = time.monotonic() + 1.0
+                    return False
+                path = self.github.source(task)(request, Path(directory), deadline, cancel)
+                self.event(EventType.TOOL_CALL, "Pinned GitHub repository snapshot acquired.")
+                yield path
+                self.checkpoint()
+        return checkout()
 
     def execute(self, *, commit_sha: str, command: list[str], patch: str = ""):
         from app.worker.sandbox import execute

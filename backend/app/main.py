@@ -33,12 +33,16 @@ def create_app(
     settings = settings or get_settings()
     settings.assert_safe_for_production()
     configure_logging(settings)
-    if settings.environment == "production" and (github is None or github_oauth is None):
+    if settings.environment == "production" and settings.github_mode != "real" and (github is None or github_oauth is None):
         raise RuntimeError(
             "Production API requires GitHub repository and OAuth providers."
         )
     store = store or build_store(settings)
-    if github is None:
+    if settings.github_mode == "real":
+        from app.services.github_real import RealGitHubGateway, AppOAuthProvider
+        github = github or RealGitHubGateway(settings, store)
+        github_oauth = github_oauth or AppOAuthProvider(settings)
+    elif github is None:
         github = FakeGitHubGateway()
 
     @asynccontextmanager

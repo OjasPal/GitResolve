@@ -3,9 +3,10 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-WORKDIR /app
-COPY pyproject.toml ./
-COPY app ./app
+WORKDIR /opt/gitresolve/backend
+COPY backend/pyproject.toml ./
+COPY backend/app ./app
+COPY githubapp /opt/gitresolve/githubapp
 
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir ".[firestore]"

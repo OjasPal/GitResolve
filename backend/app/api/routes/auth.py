@@ -98,10 +98,10 @@ def dev_token(
 ) -> TokenResponse:
     """LOCAL/TEST ONLY: mint a session JWT without GitHub OAuth.
 
-    Returns 404 outside `ENVIRONMENT=local|test`. Replaced by the GitHub OAuth
-    callback (`/auth/github/*`) in Phase 3.
+    Returns 404 outside local/test fixture mode. Real mode uses the GitHub
+    OAuth callback (`/auth/github/*`).
     """
-    if settings.environment not in ("local", "test"):
+    if settings.environment not in ("local", "test") or settings.github_mode != "fixture":
         raise ApiError(404, "not_found", "Not found.")
     service.upsert_user(body.user_id, body.github_login)
     token, expires = create_session_token(settings, body.user_id)

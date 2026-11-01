@@ -25,7 +25,7 @@ try {
   [System.IO.File]::WriteAllText($Rendered, $text, (New-Object System.Text.UTF8Encoding($false)))
 
   Write-Host "== Building $Image"
-  G builds submit $Backend --project $Project --tag $Image --quiet
+  G builds submit (Split-Path $Backend -Parent) --project $Project --config (Join-Path $Here "cloudbuild.yaml") --substitutions "_IMAGE=$Image" --quiet
 
   Write-Host "== Deploying $Service"
   G run deploy $Service --project $Project --region $Region --image $Image --quiet `
