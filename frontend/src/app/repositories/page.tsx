@@ -81,7 +81,7 @@ export default function RepositoriesPage() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
               <FolderGit2 className="w-6 h-6 text-neutral-600 dark:text-neutral-400" />
-              <span>Accessible Repositories</span>
+              <span>Repositories.</span>
             </h1>
             <p className="text-sm text-neutral-500 dark:text-neutral-400 mt-0.5">
               Repositories authorized through the GitResolve GitHub App installation
@@ -103,7 +103,7 @@ export default function RepositoriesPage() {
               rel="noreferrer"
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-800 dark:text-neutral-200 text-xs font-medium transition-colors"
             >
-              <span>Add / Configure Repos</span>
+              <span>Add or remove repositories</span>
               <ExternalLink className="w-3.5 h-3.5" />
             </a>
           </div>
@@ -129,7 +129,7 @@ export default function RepositoriesPage() {
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search authorized repositories..."
+            aria-label="Search authorized repositories" placeholder="Search your repositories…"
             className="w-full pl-9 pr-4 py-2 text-xs rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 placeholder:text-neutral-400 focus:outline-none focus:ring-1 focus:ring-neutral-400"
           />
         </div>
@@ -209,7 +209,7 @@ export default function RepositoriesPage() {
                       </span>
                     </h2>
                     <p className="text-xs font-mono text-neutral-500">
-                      Default branch: {activeRepo.defaultBranch} · Repo ID: {activeRepo.id}
+                      Default branch: {activeRepo.defaultBranch}
                     </p>
                   </div>
 
@@ -218,7 +218,7 @@ export default function RepositoriesPage() {
                     className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-neutral-900 hover:bg-neutral-800 dark:bg-neutral-100 dark:hover:bg-neutral-200 text-white dark:text-neutral-900 text-xs font-semibold self-start sm:self-center"
                   >
                     <Wrench className="w-3.5 h-3.5" />
-                    <span>Start Repair on Repo</span>
+                    <span>Fix an issue</span>
                   </Link>
                 </div>
 

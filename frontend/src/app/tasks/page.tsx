@@ -1,5 +1,6 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
@@ -18,12 +19,14 @@ import {
   Search} from "lucide-react";
 
 export default function TasksPage() {
+  const params = useSearchParams();
+  const [repoFilter, setRepoFilter] = useState("all");
   const [tasks, setTasks] = useState<TaskSummaryItem[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [filterStatus, setFilterStatus] = useState<string>("all");
+  const [filterStatus, setFilterStatus] = useState<string>(params.get("status") || "all");
 
   const loadTasks = async (append = false, next: string | null = null) => {
     try {
@@ -57,9 +60,9 @@ export default function TasksPage() {
       (filterStatus === "active" && ["queued", "planning", "running", "creating_pr"].includes(t.status)) ||
       (filterStatus === "review" && ["awaiting_start", "awaiting_approval"].includes(t.status)) ||
       (filterStatus === "completed" && t.status === "completed") ||
-      (filterStatus === "failed" && (t.status.startsWith("failed_") || t.status === "timed_out" || t.status === "worker_lost"));
+      (filterStatus === "failed" && (t.status.startsWith("failed_") || t.status === "timed_out" || ["worker_lost", "rejected", "cancelled"].includes(t.status)));
 
-    return matchesSearch && matchesStatus;
+    return matchesSearch && matchesStatus && (repoFilter === "all" || t.repoId === repoFilter);
   });
 
   return (
@@ -117,11 +120,12 @@ export default function TasksPage() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by repository, issue #, title, or task ID..."
+              aria-label="Search repairs" placeholder="Search repairs…"
               className="w-full pl-9 pr-4 py-2 text-xs rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 placeholder:text-neutral-400 focus:outline-none focus:ring-1 focus:ring-neutral-400"
             />
           </div>
 
+          <label className="sr-only" htmlFor="task-repo-filter">Filter by repository</label><select id="task-repo-filter" value={repoFilter} onChange={e=>setRepoFilter(e.target.value)} className="px-4"><option value="all">All repositories</option>{Array.from(new Map(tasks.map(t=>[t.repoId,t.repoFullName])).entries()).map(([id,name])=><option key={id} value={id}>{name}</option>)}</select>
           <div className="flex items-center gap-1.5 p-1 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-100 dark:bg-neutral-900 text-xs overflow-x-auto">
             {["all", "active", "review", "completed", "failed"].map((cat) => (
               <button

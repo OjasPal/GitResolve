@@ -136,7 +136,7 @@ export default function NewRepairPage() {
 
   return (
     <ProtectedRoute>
-      <div className="max-w-3xl mx-auto space-y-6 py-4">
+      <div className="new-repair-page mx-auto space-y-8 py-4">
         {/* Breadcrumb / Back button */}
         <div className="flex items-center gap-2 text-xs text-neutral-500">
           <Link
@@ -154,10 +154,10 @@ export default function NewRepairPage() {
         <div className="border-b border-neutral-200 dark:border-neutral-800 pb-4">
           <h1 className="text-2xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
             <Wrench className="w-6 h-6 text-neutral-600 dark:text-neutral-400" />
-            <span>Initiate Autonomous Bug Repair</span>
+            <span>What needs fixing?</span>
           </h1>
           <p className="text-sm text-neutral-500 dark:text-neutral-400 mt-1">
-            Specify a bug for the LangGraph agent to analyze, reproduce in a Docker sandbox, and prepare a fix for review.
+            Choose a repository. Bring an issue, or describe the bug in your own words.
           </p>
         </div>
 
@@ -173,7 +173,7 @@ export default function NewRepairPage() {
         )}
 
         {/* Form Card */}
-        <form onSubmit={handleSubmit} className="border border-neutral-200 dark:border-neutral-800 rounded-xl p-6 bg-white dark:bg-neutral-900 shadow-sm space-y-6">
+        <div className="new-repair-layout"><form onSubmit={handleSubmit} className="border border-neutral-200 dark:border-neutral-800 rounded-xl p-6 bg-white dark:bg-neutral-900 shadow-sm space-y-6">
           {/* Field 1: Repository Selector */}
           <RepositorySelector
             repositories={repositories}
@@ -303,12 +303,12 @@ export default function NewRepairPage() {
               ) : (
                 <>
                   <Wrench className="w-4 h-4" />
-                  <span>Start Repair</span>
+                  <span>Analyze</span>
                 </>
               )}
             </button>
           </div>
-        </form>
+        </form><aside className="glass-card repair-limits"><span className="eyebrow">You stay in control</span><h2>Plan first.<br/>Repair second.</h2><p className="neutral-note">Review the investigation plan before the agent starts changing code.</p><div className="border-t border-neutral-800 py-5 mt-6"><p className="text-sm">Standard safety limits</p><ul className="text-sm text-neutral-500 space-y-4 mt-5"><li>3 repair attempts</li><li>20 minute task budget</li><li>5 changed files / 150 lines</li><li>Isolated test execution</li></ul></div><p className="neutral-note">The server enforces the limits shown on your created task. A pull request requires your exact-diff approval.</p></aside></div>
       </div>
     </ProtectedRoute>
   );
