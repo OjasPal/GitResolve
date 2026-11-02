@@ -231,3 +231,6 @@ __marimo__/
 secrets/
 *credentials*.json
 *service-account*.json
+
+# Local repair diagnostics (source snapshots and artifacts).
+.diagnostics/

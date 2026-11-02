@@ -32,7 +32,8 @@ def _clean_output(raw: bytes | str, max_bytes: int) -> tuple[str, bool]:
     return text.encode()[:max_bytes].decode("utf-8", errors="ignore"), truncated
 
 
-def _docker_run_args(container: str, repo_dir: Path, command: list[str], patch_path=None) -> list[str]:
+def _docker_run_args(container: str, repo_dir: Path, command: list[str], patch_path=None, max_diff_lines=150,
+                     profile="python", ui_entrypoint="", require_ui_checks=False, require_ui_interaction=False, require_ui_report=False, require_ui_answers=False) -> list[str]:
     args = [
         "docker", "run", "-d", "--pull", "never", "--name", container,
         "--user", "10001:10001", "--network", "none", "--read-only",
@@ -42,11 +43,16 @@ def _docker_run_args(container: str, repo_dir: Path, command: list[str], patch_p
         "--tmpfs", "/workspace:rw,nosuid,nodev,size=1g,uid=10001,gid=10001",
         "--log-driver", "json-file", "--log-opt", "max-size=20m", "--log-opt", "max-file=1",
         "--mount", f"type=bind,source={repo_dir},target=/input,readonly",
-        "-e", "HOME=/tmp", "--workdir", "/workspace",
+        "-e", "HOME=/tmp", "-e", f"GITRESOLVE_MAX_DIFF_LINES={max_diff_lines}", "--workdir", "/workspace",
     ]
     if patch_path:
         args += ["--mount", f"type=bind,source={patch_path},target=/patch.diff,readonly"]
-    return args + [IMAGE, "python", "-I", "/usr/local/lib/gitresolve_entry.py", *command]
+    if profile == "streamlit":
+        args += ["-e", f"GITRESOLVE_STREAMLIT_ENTRY={ui_entrypoint}", "-e", f"GITRESOLVE_REQUIRE_UI_CHECKS={int(require_ui_checks)}",
+                 "-e", f"GITRESOLVE_REQUIRE_UI_INTERACTION={int(require_ui_interaction)}", "-e", f"GITRESOLVE_REQUIRE_UI_REPORT={int(require_ui_report)}",
+                 "-e", f"GITRESOLVE_REQUIRE_UI_ANSWERS={int(require_ui_answers)}"]
+    image = "gitresolve-sandbox:streamlit" if profile == "streamlit" else IMAGE
+    return args + [image, "python", "-I", "/usr/local/lib/gitresolve_entry.py", *command]
 
 
 def _force_remove(func, path, _exc):
@@ -64,7 +70,7 @@ def run_sandbox(request: ExecutionRequest, allow_local_repo: bool = False, cance
     try:
         checkpoint(deadline, cancel)
         if request.patch:
-            validate_patch(request.patch)
+            validate_patch(request.patch, request.max_diff_lines)
         workspace = Path(tempfile.mkdtemp(prefix="gitresolve_"))
         repo = (source_provider(request, workspace, deadline, cancel) if source_provider
                 else acquire(request, workspace, deadline, cancel, allow_local_repo))
@@ -74,7 +80,8 @@ def run_sandbox(request: ExecutionRequest, allow_local_repo: bool = False, cance
             patch_path.write_text(request.patch, encoding="utf-8", newline="")
             patch_path.chmod(0o644)
         attempted = True
-        start = capture(_docker_run_args(container, repo, request.command, patch_path), deadline, cancel, 8192)
+        start = capture(_docker_run_args(container, repo, request.command, patch_path, request.max_diff_lines,
+                        request.profile, request.ui_entrypoint, request.require_ui_checks, request.require_ui_interaction, request.require_ui_report, request.require_ui_answers), deadline, cancel, 8192)
         if start.returncode:
             raise SandboxError("docker_start_failed", "Docker could not start the sandbox.")
         while True:
@@ -111,6 +118,11 @@ def run_sandbox(request: ExecutionRequest, allow_local_repo: bool = False, cance
             result.error_message = "Workspace preparation or patch application failed."
         else:
             result.status = "passed" if result.exit_code == 0 else "failed"
+        if request.require_ui_checks and result.status == "passed" and "UI GATE PASSED:" not in result.stdout:
+            result.status = "error"
+            result.error_code = "ui_verification_missing"
+            result.error_message = "Required framework UI verification evidence is missing."
+            result.stderr += "\n" + result.error_message
     except SandboxError as exc:
         result.error_code, result.error_message = exc.code, exc.message
         if exc.code == "command_timeout":

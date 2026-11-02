@@ -42,6 +42,6 @@ def validate_fix(diff: str, limits: dict, evidence: dict, base_sha: str | None) 
         elif line.startswith(("+", "-")):
             changes += 1
     if not paths or len(set(paths)) != len(paths) or len(paths) > limits["maxDiffFiles"] or changes > limits["maxDiffLines"]:
-        raise ValueError("Diff exceeds scope or has duplicate file sections.")
+        raise ValueError(f"Diff exceeds scope or has duplicate file sections: {len(paths)} files, {changes} changed lines; limits {limits['maxDiffFiles']} files and {limits['maxDiffLines']} lines.")
     if not any(PurePosixPath(p).name.startswith("test_") and p.endswith(".py") for p in paths):
         raise ValueError("A regression test must be included in the diff.")

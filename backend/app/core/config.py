@@ -1,6 +1,7 @@
 """Typed settings. Secrets come from the environment (Secret Manager in prod)."""
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field
@@ -9,12 +10,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", extra="ignore", case_sensitive=False
+        env_file=Path(__file__).resolve().parents[2] / ".env", extra="ignore", case_sensitive=False
     )
 
     # --- Runtime -----------------------------------------------------------
     environment: Literal["local", "test", "production"] = "local"
     store_backend: Literal["memory", "firestore"] = "memory"
+    # Optional single-process development snapshot; production still requires Firestore.
+    local_state_path: Path | None = None
     agent_mode: Literal["fake", "langgraph"] = "fake"
     # Local convenience: run the worker loop inside the API process. Only honoured
     # when environment is local/test; use `python -m app.worker.runner` otherwise.

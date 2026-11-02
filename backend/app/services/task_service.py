@@ -163,10 +163,11 @@ class TaskService:
         return self._github(lambda: self.github.list_open_issues(user_id, repo_id))
 
     # --- Create -------------------------------------------------------------------
-    def _replay(self, existing: Doc, user_id: str, repo_id: str, issue_number: int) -> Doc:
+    def _replay(self, existing: Doc, user_id: str, repo_id: str, issue_number: int | None, prompt: str | None = None) -> Doc:
         if existing["userId"] != user_id:
             raise not_found()
-        if existing["repoId"] != repo_id or existing["issue"]["number"] != issue_number:
+        if (existing["repoId"] != repo_id or existing["issue"]["number"] != issue_number
+                or (issue_number is None and existing["issue"].get("body") != prompt)):
             raise ApiError(
                 409,
                 "idempotency_key_reuse",
@@ -175,14 +176,18 @@ class TaskService:
         return existing
 
     def create_task(
-        self, user_id: str, repo_id: str, issue_number: int, idempotency_key: str | None
+        self, user_id: str, repo_id: str, issue_number: int | None, idempotency_key: str | None,
+        *, prompt: str | None = None
     ) -> tuple[Doc, bool]:
         """Returns (task, created). `created` is False for an idempotent replay."""
+        prompt = prompt.strip() if prompt is not None else None
+        if bool(prompt) == (issue_number is not None) or (prompt is not None and len(prompt) > ISSUE_BODY_MAX_CHARS):
+            raise ApiError(422, "invalid_request", "Provide either a bug description (up to 20,000 characters) or a GitHub issue.")
         task_id = task_id_for(user_id, idempotency_key)
         if idempotency_key:
             existing = self.store.get(task_path(task_id))
             if existing is not None:
-                return self._replay(existing, user_id, repo_id, issue_number), False
+                return self._replay(existing, user_id, repo_id, issue_number, prompt), False
 
         now = self.clock()
         midnight = datetime.combine(now.date(), time.min, tzinfo=timezone.utc)
@@ -198,9 +203,17 @@ class TaskService:
         repo = self._github(lambda: self.github.get_repository(user_id, repo_id))
         if repo is None:
             raise not_found()
-        issue = self._github(lambda: self.github.get_issue(user_id, repo_id, issue_number))
-        if issue is None:
-            raise not_found()
+        if prompt:
+            # A direct report is task-local; no GitHub issue is created.
+            issue_doc = {
+                "number": None, "title": prompt.splitlines()[0][:200], "url": None,
+                "body": prompt, "bodyTruncated": False, "labels": [], "comments": [],
+            }
+        else:
+            issue = self._github(lambda: self.github.get_issue(user_id, repo_id, issue_number))
+            if issue is None:
+                raise not_found()
+            issue_doc = normalize_issue(issue)
 
         s = self.settings
         doc: Doc = {
@@ -212,7 +225,7 @@ class TaskService:
             "installationId": repo.installation_id,
             "defaultBranch": repo.default_branch,
             "baseSha": None,
-            "issue": normalize_issue(issue),
+            "issue": issue_doc,
             "idempotencyKey": idempotency_key,
             "status": TaskStatus.QUEUED.value,
             "stage": TaskStage.INTAKE.value,
@@ -269,7 +282,7 @@ class TaskService:
         def fn(txn: Txn) -> tuple[Doc, bool]:
             existing = txn.get(task_path(task_id))
             if existing is not None:
-                return self._replay(existing, user_id, repo_id, issue_number), False
+                return self._replay(existing, user_id, repo_id, issue_number, prompt), False
             user = txn.get(user_path(user_id))
             holder_id = user.get("activeTaskId") if user else None
             if holder_id:
@@ -309,7 +322,7 @@ class TaskService:
             existing = self.store.get(task_path(task_id))
             if existing is None:
                 raise
-            return self._replay(existing, user_id, repo_id, issue_number), False
+            return self._replay(existing, user_id, repo_id, issue_number, prompt), False
         self.store.set(f"repositories/{repo_id}", repo_doc)
         return result
 

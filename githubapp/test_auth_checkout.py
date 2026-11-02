@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import jwt
 import pytest
+import requests
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, NoEncryption
 
@@ -75,3 +76,28 @@ def test_rejects_untrusted_archive_redirect(monkeypatch, tmp_path, location):
     monkeypatch.setattr('githubapp.checkout.requests.get', lambda *a, **kw: Response(302, {'Location': location}))
     with pytest.raises(GitHubClientError):
         acquire_archive(GitHubClient('secret'), 'o/r', 'a'*40, tmp_path, time.monotonic()+10, None)
+
+
+def test_archive_retries_one_transient_read_and_removes_partial_download(monkeypatch, tmp_path):
+    attempts = []
+    def download(*args):
+        attempts.append(1)
+        if len(attempts) == 1:
+            (tmp_path / "source.tar.gz").write_bytes(b"partial")
+            raise requests.ReadTimeout()
+        assert not (tmp_path / "source.tar.gz").exists()
+        return tmp_path / "repo"
+    monkeypatch.setattr("githubapp.checkout._acquire_archive_once", download)
+    assert acquire_archive(GitHubClient("secret"), "o/r", "a"*40, tmp_path, time.monotonic()+10, None) == tmp_path / "repo"
+    assert len(attempts) == 2
+
+
+def test_archive_read_retries_are_bounded(monkeypatch, tmp_path):
+    calls = []
+    def download(*args):
+        calls.append(1)
+        raise requests.ReadTimeout()
+    monkeypatch.setattr("githubapp.checkout._acquire_archive_once", download)
+    with pytest.raises(GitHubClientError):
+        acquire_archive(GitHubClient("secret"), "o/r", "a"*40, tmp_path, time.monotonic()+10, None)
+    assert len(calls) == 2

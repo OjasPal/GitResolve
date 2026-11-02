@@ -1,3 +1,4 @@
+from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 
@@ -8,13 +9,13 @@ from agent.state import AgentState
 def analyze_issue(state: AgentState) -> dict:
     """Validate the issue input before calling the LLM."""
 
-    if not state["repo_full_name"].strip():
+    if not state.get("repo_full_name", "").strip():
         raise ValueError("Repository name cannot be empty.")
 
-    if state["issue_number"] <= 0:
+    if state.get("issue_number", 0) is not None and state.get("issue_number", 0) <= 0:
         raise ValueError("Issue number must be positive.")
 
-    if not state["issue_title"].strip():
+    if not state.get("issue_title", "").strip():
         raise ValueError("Issue title cannot be empty.")
 
     return {
@@ -25,15 +26,41 @@ def analyze_issue(state: AgentState) -> dict:
 
 
 def create_plan(state: AgentState) -> dict:
-    """Generate an issue-specific investigation plan with Gemini."""
+    """Generate an issue-specific investigation plan using the routing architecture."""
 
     try:
-        analysis = analyze_issue_with_gemini(
-            repo_full_name=state["repo_full_name"],
-            issue_number=state["issue_number"],
-            issue_title=state["issue_title"],
-            issue_body=state["issue_body"],
+        is_escalated = bool(
+            state.get("is_complex_issue", False)
+            or state.get("specialist_escalation_requested", False)
         )
+        escalation_reason = (
+            state.get("escalation_reason")
+            or "Complex cross-file or high-difficulty issue flagged by workflow"
+        )
+        escalation_count = state.get("escalation_count", 0)
+
+        # Call analyze_issue_with_gemini (which may be monkeypatched by tests or invoke the central router)
+        kwargs: dict[str, Any] = {
+            "repo_full_name": state["repo_full_name"],
+            "issue_number": state["issue_number"],
+            "issue_title": state["issue_title"],
+            "issue_body": state["issue_body"],
+        }
+        # Pass optional escalation parameters if accepted by the function
+        try:
+            analysis = analyze_issue_with_gemini(
+                task_id=state.get("task_id"),
+                escalate=is_escalated,
+                escalation_reason=escalation_reason,
+                escalation_count=escalation_count,
+                **kwargs,
+            )
+        except TypeError:
+            # Caller monkeypatched with original 4-arg signature
+            analysis = analyze_issue_with_gemini(**kwargs)
+
+        router_result = getattr(analysis, "_router_result", None)
+        router_meta = router_result.to_metadata() if router_result else {}
 
     except Exception as exc:
         return {
@@ -45,7 +72,7 @@ def create_plan(state: AgentState) -> dict:
             ),
         }
 
-    return {
+    response_state: dict[str, Any] = {
         "problem_summary": analysis.problem_summary,
         "plan": analysis.investigation_steps,
         "needs_more_information": analysis.needs_more_information,
@@ -54,6 +81,14 @@ def create_plan(state: AgentState) -> dict:
         "status": "awaiting_start",
         "error": None,
     }
+
+    if router_meta:
+        response_state.update(router_meta)
+        response_state["routing_metadata"] = router_meta
+        if is_escalated:
+            response_state["escalation_count"] = escalation_count + 1
+
+    return response_state
 
 
 def await_start(state: AgentState) -> dict:
@@ -68,7 +103,7 @@ def await_start(state: AgentState) -> dict:
 def route_after_planning(state: AgentState) -> str:
     """Stop if analysis failed; otherwise finish the planning flow."""
 
-    if state["status"] == "failed":
+    if state.get("status") == "failed":
         return "end"
 
     return "await_start"

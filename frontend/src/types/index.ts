@@ -102,7 +102,7 @@ export interface IssueComment {
 }
 
 export interface IssueView {
-  number: number;
+  number: number | null;
   title?: string | null;
   url?: string | null;
   body?: string | null;
@@ -112,7 +112,7 @@ export interface IssueView {
 }
 
 export interface IssueSummary {
-  number: number;
+  number: number | null;
   title?: string | null;
   url?: string | null;
   labels?: string[];
@@ -177,6 +177,8 @@ export interface TaskResponse {
   limits: Limits;
   finalDiffHash?: string | null;
   finalDiffSummary?: {
+    commitMessage?: string;
+    uiVerification?: string;
     filesChanged?: number;
     linesAdded?: number;
     linesRemoved?: number;
@@ -264,18 +266,11 @@ export interface IssueListItem {
   number: number;
   title: string;
   url: string;
-  labels: string[];
+  labels?: string[];
 }
 
 export interface IssueListResponse {
   items: IssueListItem[];
-}
-
-export interface MeResponse {
-  id: string;
-  githubLogin: string;
-  avatarUrl?: string | null;
-  activeTaskId?: string | null;
 }
 
 export interface TokenResponse {
@@ -284,10 +279,9 @@ export interface TokenResponse {
   expiresAt: string;
 }
 
-export interface ErrorResponse {
-  error: {
-    code: string;
-    message: string;
-    details?: Record<string, unknown>;
-  };
+export interface MeResponse {
+  id: string;
+  githubLogin: string;
+  avatarUrl?: string | null;
+  activeTaskId?: string | null;
 }

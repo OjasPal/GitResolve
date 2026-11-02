@@ -49,3 +49,17 @@ regression coverage. The agent must supply actual verification evidence.
 Private repository authentication, GitHub App integration, patch generation,
 commits and PR creation are not implemented by this runner. Live Docker tests
 must pass on Linux before treating the isolation controls as validated.
+
+## Streamlit verification profile
+
+Build `gitresolve-sandbox:streamlit` with `sandbox/streamlit.Dockerfile` after
+building the base image. It adds Streamlit 1.66, markdown-it-py, PyPDF2, dotenv,
+and langchain-core through trusted image construction, never runtime installation.
+The runner selects only the `python` or `streamlit` image; requests cannot choose
+arbitrary images. Resource limits and isolation are identical for both profiles.
+
+For Streamlit, an image-owned pytest launcher preloads the framework and quality
+gate before repository imports. Final verification requires AppTest execution of
+the actual detected entry point, requested checkbox transitions, and no HTML-as-code
+or unformatted report Markdown in the emitted UI. Missing evidence blocks success.
+This is framework/rendering verification, not a pixel-perfect browser assessment.

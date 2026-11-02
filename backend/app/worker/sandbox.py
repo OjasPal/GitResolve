@@ -35,6 +35,12 @@ def execute(ctx, *, commit_sha: str, command: list[str], patch: str = ""):
     request = models.ExecutionRequest(
         execution_id=ctx.task_id, repo_url=f"https://github.com/{task['repoFullName']}",
         commit_sha=commit_sha, command=command, timeout_seconds=math.floor(remaining), patch=patch,
+        max_diff_lines=task["limits"]["maxDiffLines"],
+        profile=getattr(ctx, "sandbox_profile", "python"), ui_entrypoint=getattr(ctx, "ui_entrypoint", ""),
+        require_ui_checks=getattr(ctx, "require_ui_checks", False),
+        require_ui_interaction=getattr(ctx, "require_ui_interaction", False),
+        require_ui_report=getattr(ctx, "require_ui_report", False),
+        require_ui_answers=getattr(ctx, "require_ui_answers", False),
     )
     stopped = []
     next_check = 0.0

@@ -1,6 +1,10 @@
-"""In-memory store: local development and tests. Thread-safe, not durable."""
+"""Single-process local store, with optional atomic persistence for development."""
 
 import copy
+import json
+import os
+from pathlib import Path
+import tempfile
 import threading
 from collections.abc import Callable
 from datetime import datetime
@@ -57,15 +61,46 @@ class _MemTxn(Txn):
 
 
 class MemoryStore(Store):
-    def __init__(self) -> None:
+    def __init__(self, state_path: Path | None = None) -> None:
         self._docs: dict[str, Doc] = {}
         self._lock = threading.RLock()
+        self._state_path = Path(state_path) if state_path else None
+        if self._state_path and self._state_path.exists():
+            self._docs = json.loads(self._state_path.read_text(encoding="utf-8"),
+                                    object_hook=lambda v: datetime.fromisoformat(v["__datetime__"])
+                                    if set(v) == {"__datetime__"} else v)
+            if not isinstance(self._docs, dict):
+                raise ValueError("Local state file must contain a document dictionary.")
+
+    def _persist(self, docs) -> None:
+        if self._state_path is None:
+            return
+        def encode(value):
+            if isinstance(value, datetime):
+                return {"__datetime__": value.isoformat()}
+            raise TypeError(type(value).__name__)
+        self._state_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self._state_path.parent,
+                                             prefix=".gitresolve-state-", delete=False) as stream:
+                temporary = Path(stream.name)
+                json.dump(docs, stream, default=encode)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self._state_path)
+        finally:
+            if temporary and temporary.exists():
+                temporary.unlink()
 
     def run_transaction(self, fn: Callable[[Txn], T]) -> T:
         with self._lock:
-            txn = _MemTxn(self._docs)
+            docs = copy.deepcopy(self._docs) if self._state_path else self._docs
+            txn = _MemTxn(docs)
             result = fn(txn)
             txn.commit()
+            self._persist(docs)
+            self._docs = docs
             return result
 
     def get(self, path: str) -> Doc | None:
@@ -75,7 +110,10 @@ class MemoryStore(Store):
 
     def set(self, path: str, data: Doc) -> None:
         with self._lock:
-            self._docs[path] = copy.deepcopy(data)
+            docs = copy.deepcopy(self._docs) if self._state_path else self._docs
+            docs[path] = copy.deepcopy(data)
+            self._persist(docs)
+            self._docs = docs
 
     def _tasks(self) -> list[Doc]:
         return [

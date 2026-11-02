@@ -1,23 +1,15 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import { Suspense } from "react";
+import { AppAccess } from "@/components/AppAccess";
 import { Navbar } from "@/components/Navbar";
+import { AuthProvider } from "@/context/AuthContext";
+import { ThemeProvider } from "@/context/ThemeContext";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
-
 export const metadata: Metadata = {
-  title: "GitResolve — AI-Powered Automated Bug Fixer",
+  title: "GitResolve — Autonomous GitHub Bug Investigator & Repair Platform",
   description:
-    "Autonomous GitHub issue investigator and automated code repair platform powered by LangGraph, FastAPI, and Docker execution sandbox.",
+    "AI-powered code repair platform orchestrating LangGraph multi-model routing, isolated Docker execution sandboxes, and human-in-the-loop pull request preparation.",
 };
 
 export default function RootLayout({
@@ -28,19 +20,26 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased dark`}
+      suppressHydrationWarning
+      className="h-full antialiased dark"
     >
-      <body className="min-h-full flex flex-col bg-slate-950 text-slate-100 font-sans selection:bg-sky-500/20 selection:text-sky-300">
-        <Suspense fallback={<div className="h-16 border-b border-slate-900 bg-slate-950" />}>
-          <Navbar />
-        </Suspense>
-        <p className="text-center text-xs text-amber-300 p-2">Development prototype: automated repair is still in development. GitHub publishing requires passing tests and your approval.</p>
-        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          {children}
-        </main>
-        <footer className="w-full border-t border-slate-900 py-6 text-center text-xs text-slate-600">
-          GitResolve — Autonomous Agentic Coding Platform · Member 1 (AI) · Member 2 (Backend) · Member 3 (Sandbox) · Member 4 (Frontend)
-        </footer>
+      <head><script dangerouslySetInnerHTML={{ __html: `try{document.documentElement.classList.toggle('dark',localStorage.getItem('gitresolve_theme')!=='light')}catch{}` }} /></head>
+      <body className="min-h-full flex flex-col bg-white dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100 font-sans selection:bg-neutral-200 dark:selection:bg-neutral-800">
+        <ThemeProvider>
+          <AuthProvider>
+            <Suspense fallback={<div className="h-14 border-b border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950" />}>
+              <Navbar />
+            </Suspense>
+
+            <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+              <Suspense fallback={<p className="py-16 text-center">Loading...</p>}><AppAccess>{children}</AppAccess></Suspense>
+            </main>
+
+            <footer className="w-full border-t border-neutral-200 dark:border-neutral-800 py-6 text-center text-xs text-neutral-500 font-mono">
+              GitResolve · Autonomous Engineering Platform · Pull Requests Require Human Maintainer Approval
+            </footer>
+          </AuthProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

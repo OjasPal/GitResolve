@@ -45,16 +45,20 @@ def create_app(
     elif github is None:
         github = FakeGitHubGateway()
 
+    # A separate worker cannot share an in-memory store. Run it in-process locally.
+    local_worker = settings.environment == "local" and settings.store_backend == "memory" and settings.github_mode == "real"
+
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         stop = threading.Event()
         thread = None
-        if settings.embedded_worker and settings.environment in ("local", "test"):
+        if (settings.embedded_worker or local_worker) and settings.environment in ("local", "test"):
             from app.worker.runner import build_worker
 
             worker = build_worker(settings, store)
             thread = threading.Thread(target=worker.run_forever, args=(stop,), name="embedded-worker", daemon=True)
             thread.start()
+            app.state.worker_thread = thread
         try:
             yield
         finally:
@@ -71,6 +75,7 @@ def create_app(
         redoc_url="/redoc" if settings.docs_on else None,
         openapi_url="/openapi.json" if settings.docs_on else None,
     )
+    app.state.worker_thread = None
     app.state.settings = settings
     app.state.store = store
     app.state.github_oauth = github_oauth

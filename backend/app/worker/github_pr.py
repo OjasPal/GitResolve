@@ -10,6 +10,7 @@ from app.services.ids import sha256_hash
 from app.services.github import GitHubUnavailable
 from app.services.policy import validate_fix
 from app.worker.pr import PullRequestError, PullRequestResult
+from app.worker.publication_text import publication_subject, reserve_branch
 
 
 class GitHubPullRequestCreator:
@@ -35,7 +36,9 @@ class GitHubPullRequestCreator:
             if repo.full_name != task['repoFullName']:
                 raise GitHubClientError('access_revoked')
             path = f'/repos/{repo.full_name}'
-            branch = f"gitresolve/{task['id']}-{digest[-12:]}"
+            subject = publication_subject(task, diff)
+            branch = reserve_branch(self.gateway.store, task, subject, digest)
+            subject = self.gateway.store.get("tasks/" + task["id"])["publication"]["commitMessage"]
             owner = repo.full_name.split('/')[0]
             # Retry after a lost API response: find our existing PR before doing any writes.
             existing = client.request('GET', path + '/pulls', params={'head': f'{owner}:{branch}', 'state': 'all', 'per_page': 100})
@@ -82,12 +85,12 @@ class GitHubPullRequestCreator:
             new_tree = client.request('POST', path + '/git/trees', json={'base_tree': tree_sha, 'tree': files})
             checkpoint()
             new_commit = client.request('POST', path + '/git/commits', json={
-                'message': f"Fix issue #{task['issue']['number']}\n\n{marker}",
+                'message': subject,
                 'tree': new_tree['sha'], 'parents': [task['baseSha']],
                 # Stable identity/date make retries produce the same commit SHA.
-                'author': {'name': 'GitResolve', 'email': 'gitresolve@users.noreply.github.com',
+                'author': {'name': 'gitresolve-agent', 'email': 'gitresolve@users.noreply.github.com',
                            'date': task['createdAt'].isoformat()},
-                'committer': {'name': 'GitResolve', 'email': 'gitresolve@users.noreply.github.com',
+                'committer': {'name': 'gitresolve-agent', 'email': 'gitresolve@users.noreply.github.com',
                               'date': task['createdAt'].isoformat()},
             })
             checkpoint()
@@ -101,9 +104,9 @@ class GitHubPullRequestCreator:
             event('GitHub branch created for the approved diff.')
             checkpoint()
             pr = client.request('POST', path + '/pulls', json={
-                'title': f"Fix #{task['issue']['number']}: {task['issue']['title']}"[:200],
+                'title': subject,
                 'head': branch, 'base': task['defaultBranch'],
-                'body': f"Fixes #{task['issue']['number']}\n\nHuman-approved diff; Docker tests passed.\n\n{marker}",
+                'body': ((f"Fixes #{task['issue']['number']}\n\n" if task["issue"]["number"] else "") + f"Human-approved diff; Docker tests passed.\n\n{marker}"),
                 'draft': True,
             })
             return PullRequestResult(pr['number'], pr['html_url'], branch)

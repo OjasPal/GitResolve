@@ -39,7 +39,7 @@ def create_task(
 
     A repeated `Idempotency-Key` with the same body returns the existing task (200).
     """
-    task, created = service.create_task(user_id, body.repo_id, body.issue_number, idempotency_key)
+    task, created = service.create_task(user_id, body.repo_id, body.issue_number, idempotency_key, prompt=body.prompt)
     if not created:
         response.status_code = 200
     return TaskResponse.from_doc(task)

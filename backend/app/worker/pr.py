@@ -30,7 +30,7 @@ class FakePullRequestCreator:
     """LOCAL ONLY. Returns a placeholder; no GitHub call is made."""
 
     def create(self, task: dict, diff: str) -> PullRequestResult:
-        number = int(task["issue"]["number"])
+        number = int(task["issue"]["number"] or 1)
         return PullRequestResult(
             number=number,
             url=f"https://example.invalid/{task['repoFullName']}/pull/{number}",

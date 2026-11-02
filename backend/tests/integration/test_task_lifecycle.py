@@ -423,7 +423,7 @@ def test_dev_token_is_disabled_outside_local_and_test(env):
 
 
 def test_health_needs_no_auth_and_openapi_lists_the_contract(env):
-    assert env.client.get("/health").json() == {"status": "ok"}
+    assert env.client.get("/health").json() == {"status": "ok", "worker": {"status": "disabled", "agentMode": "fake"}}
     paths = env.client.get("/openapi.json").json()["paths"]
     for p in (f"{API}/tasks", f"{API}/tasks/{{task_id}}/start", f"{API}/tasks/{{task_id}}/approve"):
         assert p in paths

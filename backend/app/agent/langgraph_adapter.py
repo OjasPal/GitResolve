@@ -1,7 +1,6 @@
 """Adapter from the LangGraph prototype (`agent/graph.py`) to `AgentRunner`.
 
-The prototype currently implements real Gemini-backed planning only. Repair
-execution remains unimplemented.
+Planning uses the real graph; repair execution uses the Docker-verified runner.
 """
 
 import sys
@@ -25,10 +24,6 @@ class LangGraphAgentRunner:
         )
         if backend_root is None:
             raise RuntimeError("Could not locate the backend project root.")
-
-        from dotenv import load_dotenv
-
-        load_dotenv(backend_root / ".env", override=False)
 
         agent_root = next(
             (
@@ -54,7 +49,7 @@ class LangGraphAgentRunner:
             "task_id": task.task_id,
             "base_sha": task.base_sha,
             "repo_full_name": task.repo_full_name,
-            "issue_number": int(task.issue["number"]),
+            "issue_number": task.issue.get("number"),
             "issue_title": task.issue.get("title") or "",
             "issue_body": task.issue.get("body") or "",
             "stage": "intake",
@@ -66,10 +61,21 @@ class LangGraphAgentRunner:
             "status": "planning",
             "error": None,
         }
+        from app.schemas.enums import EventType, TaskStage
+        ctx.stage(TaskStage.PLAN)
+        ctx.event(EventType.INFO, "Planning started. Acquiring repository context before calling the model.")
         ctx.usage(modelCalls=1)
         with ctx.repository() as repo_path:
             state["repo_path"] = str(repo_path) if repo_path else None
+            if repo_path:
+                from app.agent.repair_runner import repository_context
+                state["issue_body"] += "\n\nUNTRUSTED REPOSITORY CONTEXT\n" + repository_context(Path(repo_path), 30000)
+            ctx.event(EventType.LLM_CALL, "Requesting an investigation plan from the configured model provider.")
             result = self._graph.invoke(state)
+            ctx.checkpoint()
+            usage = result.get("token_usage") or {}
+            ctx.usage(inputTokens=usage.get("input_tokens") or 0, outputTokens=usage.get("output_tokens") or 0)
+            ctx.event(EventType.INFO, "Planning model returned a response.")
         if result["status"] == "failed":
             return PlanResult(
                 "failed",
@@ -87,4 +93,5 @@ class LangGraphAgentRunner:
         )
 
     def execute(self, task: AgentTask, ctx: JobContext) -> ExecuteResult:
-        raise NotImplementedError("Repair execution is not implemented in the agent yet.")
+        from app.agent.repair_runner import run_repair
+        return run_repair(task, ctx)

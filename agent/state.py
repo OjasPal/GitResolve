@@ -1,5 +1,4 @@
-
-from typing import Literal, TypedDict, NotRequired
+from typing import Any, Literal, NotRequired, TypedDict
 
 
 class AgentState(TypedDict):
@@ -7,7 +6,7 @@ class AgentState(TypedDict):
 
     task_id: str
     repo_full_name: str
-    issue_number: int
+    issue_number: int | None
     issue_title: str
     issue_body: str
 
@@ -26,6 +25,22 @@ class AgentState(TypedDict):
 
     repair_attempts: int
     max_repair_attempts: int
+
+    # Routing and Observability metadata
+    selected_provider: NotRequired[str | None]
+    selected_model: NotRequired[str | None]
+    failover_occurred: NotRequired[bool]
+    specialist_escalation_occurred: NotRequired[bool]
+    provider_retries: NotRequired[int]
+    model_switch_reason: NotRequired[str | None]
+    token_usage: NotRequired[dict[str, Any] | None]
+    provider_error_details: NotRequired[list[dict[str, Any]]]
+    routing_metadata: NotRequired[dict[str, Any]]
+
+    # Specialist reasoning escalation tracking
+    escalation_count: NotRequired[int]
+    escalation_reason: NotRequired[str | None]
+    is_complex_issue: NotRequired[bool]
 
     status: Literal[
         "planning",

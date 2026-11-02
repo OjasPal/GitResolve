@@ -1,208 +1,289 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { API_BASE_URL } from "@/lib/api";
+
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { ensureDevAuthenticated, listIssues, listRepositories } from "@/lib/api";
+import { ProtectedRoute } from "@/components/ProtectedRoute";
+import { listIssues, listRepositories } from "@/lib/api";
 import { IssueListItem, RepositoryView } from "@/types";
 import {
   AlertCircle,
   ExternalLink,
   FolderGit2,
-  GitFork,
-  GitPullRequest,
-  Globe,
-  Lock,
-  PlusCircle,
+  GitBranch,
   RefreshCw,
-  Tag,
-  Wrench,
-} from "lucide-react";
+  Search,
+  Wrench} from "lucide-react";
 
 export default function RepositoriesPage() {
   const [repositories, setRepositories] = useState<RepositoryView[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
   const [selectedRepo, setSelectedRepo] = useState<string | null>(null);
   const [issues, setIssues] = useState<IssueListItem[]>([]);
   const [loadingIssues, setLoadingIssues] = useState<boolean>(false);
+  const [search, setSearch] = useState("");
 
-  const loadRepos = async () => {
+  const loadRepos = useCallback(async () => {
     try {
-      await ensureDevAuthenticated();
+      setLoading(true);
+      setError(null);
       const res = await listRepositories();
       setRepositories(res.items || []);
-      if (res.items && res.items.length > 0) {
-        setSelectedRepo(res.items[0].id);
-      }
-    } catch {
-      // error handled
+      setSelectedRepo((current) => res.items.some((r) => r.id === current) ? current : res.items[0]?.id || null);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to load repositories");
     } finally {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    let active = true;
-    ensureDevAuthenticated().then(() => listRepositories()).then((res) => {
-      if (active) { setRepositories(res.items || []); if (res.items?.length) setSelectedRepo(res.items[0].id); }
-    }).catch((err: unknown) => {
-      if (active) {  }
-    }).finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
   }, []);
 
   useEffect(() => {
+    const timer = setTimeout(() => loadRepos(), 0);
+    return () => clearTimeout(timer);
+  }, [loadRepos]);
+
+  useEffect(() => {
     if (!selectedRepo) return;
+    let cancelled = false;
     const fetchIssues = async () => {
       try {
         setLoadingIssues(true);
         const res = await listIssues(selectedRepo);
-        setIssues(res.items || []);
-      } catch {
+        if (!cancelled) setIssues(res.items || []);
+      } catch (err) {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : "Unable to load issues.");
         setIssues([]);
       } finally {
-        setLoadingIssues(false);
+        if (!cancelled) setLoadingIssues(false);
       }
     };
-    fetchIssues();
+    const timer = setTimeout(fetchIssues, 0);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [selectedRepo]);
 
+  const filteredRepos = repositories.filter((r) =>
+    r.fullName.toLowerCase().includes(search.toLowerCase()) ||
+    (r.language && r.language.toLowerCase().includes(search.toLowerCase()))
+  );
+
+  const activeRepo = repositories.find((r) => r.id === selectedRepo);
+  const githubAppUrl =
+    process.env.NEXT_PUBLIC_GITHUB_APP_URL || `${API_BASE_URL}/auth/github/login`;
+
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2.5">
-            <FolderGit2 className="w-6 h-6 text-sky-400" />
-            <span>Accessible Repositories</span>
-          </h1>
-          <p className="text-sm text-slate-400 mt-0.5">
-            Repositories with GitResolve GitHub App access ready for automated repair workflows
-          </p>
-        </div>
-
-        <button
-          onClick={() => { setLoading(true); void loadRepos(); }}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white text-xs font-semibold cursor-pointer shrink-0"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
-          <span>Refresh Repositories</span>
-        </button>
-      </div>
-
-      {/* Grid of Repositories */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {repositories.map((repo) => {
-          const isSelected = selectedRepo === repo.id;
-
-          return (
-            <div
-              key={repo.id}
-              onClick={() => setSelectedRepo(repo.id)}
-              className={`p-5 rounded-2xl border transition-all cursor-pointer ${
-                isSelected
-                  ? "bg-slate-900/90 border-sky-500 shadow-md shadow-sky-500/10 ring-1 ring-sky-500/30"
-                  : "bg-slate-900/50 border-slate-800 hover:border-slate-700"
-              }`}
-            >
-              <div className="flex items-start justify-between gap-3 mb-3">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-slate-800 flex items-center justify-center text-sky-400 font-bold text-xs">
-                    <FolderGit2 className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-white text-sm tracking-tight">
-                      {repo.fullName}
-                    </h3>
-                    <div className="flex items-center gap-2 text-[11px] text-slate-400 font-mono mt-0.5">
-                      <span>branch: {repo.defaultBranch}</span>
-                      <span>·</span>
-                      <span>{repo.language || "Python"}</span>
-                    </div>
-                  </div>
-                </div>
-
-                <span
-                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
-                    repo.private
-                      ? "bg-slate-800 border-slate-700 text-slate-400"
-                      : "bg-emerald-950/40 border-emerald-800/60 text-emerald-300"
-                  }`}
-                >
-                  {repo.private ? <Lock className="w-2.5 h-2.5" /> : <Globe className="w-2.5 h-2.5" />}
-                  <span>{repo.private ? "Private" : "Public"}</span>
-                </span>
-              </div>
-
-              <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs">
-                <span className="text-slate-400 text-[11px]">
-                  {isSelected ? "Currently viewing open issues" : "Click to view open issues"}
-                </span>
-                <Link
-                  href="/tasks/new"
-                  onClick={(e) => e.stopPropagation()}
-                  className="flex items-center gap-1 text-sky-400 hover:text-sky-300 font-semibold text-xs"
-                >
-                  <Wrench className="w-3.5 h-3.5" />
-                  <span>Start Repair</span>
-                </Link>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Selected Repo Open Issues */}
-      {selectedRepo && (
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold text-white uppercase tracking-wider">
-              Open Issues for Selected Repository
-            </h2>
-            <span className="text-xs text-slate-400 font-mono">
-              {issues.length} open issue{issues.length !== 1 ? "s" : ""}
-            </span>
+    <ProtectedRoute>
+      <div className="space-y-6 max-w-6xl mx-auto py-2">
+        {/* Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-neutral-200 dark:border-neutral-800 pb-4">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
+              <FolderGit2 className="w-6 h-6 text-neutral-600 dark:text-neutral-400" />
+              <span>Accessible Repositories</span>
+            </h1>
+            <p className="text-sm text-neutral-500 dark:text-neutral-400 mt-0.5">
+              Repositories authorized through the GitResolve GitHub App installation
+            </p>
           </div>
 
-          {loadingIssues ? (
-            <p className="text-xs text-slate-500">Loading issues...</p>
-          ) : issues.length === 0 ? (
-            <p className="text-xs text-slate-500">No open issues found for this repository.</p>
-          ) : (
-            <div className="divide-y divide-slate-800/60">
-              {issues.map((issue) => (
-                <div key={issue.number} className="py-3 flex items-center justify-between gap-4">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono text-sky-400 font-bold text-xs">#{issue.number}</span>
-                      <span className="text-sm font-medium text-slate-200">{issue.title}</span>
-                    </div>
-                    {issue.labels && issue.labels.length > 0 && (
-                      <div className="flex items-center gap-1.5">
-                        {issue.labels.map((l) => (
-                          <span
-                            key={l}
-                            className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700"
-                          >
-                            {l}
-                          </span>
-                        ))}
+          <div className="flex items-center gap-2.5">
+            <button
+              onClick={loadRepos}
+              disabled={loading}
+              className="p-2 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300 text-xs font-semibold cursor-pointer disabled:opacity-50"
+              title="Refresh repositories"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+            </button>
+            <a
+              href={githubAppUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-800 dark:text-neutral-200 text-xs font-medium transition-colors"
+            >
+              <span>Add / Configure Repos</span>
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          </div>
+        </div>
+
+        {/* Error notice */}
+        {error && (
+          <div className="p-3.5 rounded-lg border border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400 text-xs flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+            <button onClick={loadRepos} className="underline text-xs cursor-pointer">
+              Retry
+            </button>
+          </div>
+        )}
+
+        {/* Search */}
+        <div className="relative">
+          <Search className="w-4 h-4 text-neutral-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search authorized repositories..."
+            className="w-full pl-9 pr-4 py-2 text-xs rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 placeholder:text-neutral-400 focus:outline-none focus:ring-1 focus:ring-neutral-400"
+          />
+        </div>
+
+        {/* 2-Column Layout: Repositories on left, Issue details on right */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {/* Left Column: Repo list */}
+          <div className="md:col-span-1 border border-neutral-200 dark:border-neutral-800 rounded-xl bg-white dark:bg-neutral-900 overflow-hidden divide-y divide-neutral-200 dark:divide-neutral-800">
+            <div className="p-3 bg-neutral-50 dark:bg-neutral-950 font-mono text-xs text-neutral-500 flex items-center justify-between">
+              <span>Installed Repositories</span>
+              <span>{repositories.length} total</span>
+            </div>
+
+            {loading ? (
+              <div className="p-8 text-center text-xs text-neutral-400 font-mono">
+                Loading repositories...
+              </div>
+            ) : filteredRepos.length === 0 ? (
+              <div className="p-6 text-center text-xs text-neutral-500 space-y-2">
+                <p>No repositories match.</p>
+                <a
+                  href={githubAppUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-block text-neutral-900 dark:text-neutral-100 underline text-xs"
+                >
+                  Install GitHub App on an account
+                </a>
+              </div>
+            ) : (
+              <div className="max-h-[500px] overflow-y-auto divide-y divide-neutral-100 dark:divide-neutral-800/50">
+                {filteredRepos.map((repo) => {
+                  const isSelected = repo.id === selectedRepo;
+                  return (
+                    <button
+                      key={repo.id}
+                      type="button"
+                      onClick={() => setSelectedRepo(repo.id)}
+                      className={`w-full p-3.5 text-left transition-colors cursor-pointer space-y-1 ${
+                        isSelected
+                          ? "bg-neutral-100 dark:bg-neutral-800/80 font-medium"
+                          : "hover:bg-neutral-50 dark:hover:bg-neutral-800/30"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold text-neutral-900 dark:text-neutral-100 truncate">
+                          {repo.fullName}
+                        </span>
+                        <span className="text-[10px] font-mono px-1 py-0.5 rounded border border-neutral-200 dark:border-neutral-800 text-neutral-500 shrink-0">
+                          {repo.private ? "private" : "public"}
+                        </span>
                       </div>
-                    )}
+                      <div className="flex items-center gap-3 text-[11px] font-mono text-neutral-400">
+                        <span className="flex items-center gap-1">
+                          <GitBranch className="w-3 h-3" />
+                          <span>{repo.defaultBranch}</span>
+                        </span>
+                        {repo.language && <span>{repo.language}</span>}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Right Column: Selected Repo issues & action */}
+          <div className="md:col-span-2 border border-neutral-200 dark:border-neutral-800 rounded-xl bg-white dark:bg-neutral-900 p-5 space-y-5">
+            {activeRepo ? (
+              <>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-neutral-100 dark:border-neutral-800 pb-4">
+                  <div className="space-y-1">
+                    <h2 className="text-lg font-bold text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
+                      <span>{activeRepo.fullName}</span>
+                      <span className="text-xs font-mono px-2 py-0.5 rounded border border-neutral-200 dark:border-neutral-800 text-neutral-500 font-normal">
+                        {activeRepo.private ? "Private" : "Public"}
+                      </span>
+                    </h2>
+                    <p className="text-xs font-mono text-neutral-500">
+                      Default branch: {activeRepo.defaultBranch} · Repo ID: {activeRepo.id}
+                    </p>
                   </div>
 
                   <Link
-                    href="/tasks/new"
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs shrink-0 cursor-pointer"
+                    href={`/tasks/new?repo=${encodeURIComponent(activeRepo.id)}`}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-neutral-900 hover:bg-neutral-800 dark:bg-neutral-100 dark:hover:bg-neutral-200 text-white dark:text-neutral-900 text-xs font-semibold self-start sm:self-center"
                   >
                     <Wrench className="w-3.5 h-3.5" />
-                    <span>Launch Fix</span>
+                    <span>Start Repair on Repo</span>
                   </Link>
                 </div>
-              ))}
-            </div>
-          )}
+
+                {/* Open issues list */}
+                <div className="space-y-3">
+                  <h3 className="text-xs font-mono uppercase tracking-wider text-neutral-500">
+                    Open GitHub Issues ({issues.length})
+                  </h3>
+
+                  {loadingIssues ? (
+                    <div className="p-8 text-center text-xs text-neutral-400 font-mono">
+                      Querying issues from repository...
+                    </div>
+                  ) : issues.length === 0 ? (
+                    <div className="p-8 text-center text-xs text-neutral-500 border border-dashed border-neutral-200 dark:border-neutral-800 rounded-lg">
+                      No open issues found in this repository.
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-96 overflow-y-auto divide-y divide-neutral-100 dark:divide-neutral-800 border border-neutral-200 dark:border-neutral-800 rounded-lg p-2">
+                      {issues.map((i) => (
+                        <div
+                          key={i.number}
+                          className="p-3 flex items-start justify-between gap-3 text-xs"
+                        >
+                          <div className="space-y-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-neutral-500">#{i.number}</span>
+                              <span className="font-semibold text-neutral-900 dark:text-neutral-100">
+                                {i.title}
+                              </span>
+                            </div>
+                            {i.labels && i.labels.length > 0 && (
+                              <div className="flex flex-wrap gap-1 pt-0.5">
+                                {i.labels.map((lbl, idx) => (
+                                  <span
+                                    key={idx}
+                                    className="px-1.5 py-0.5 rounded text-[10px] font-mono border border-neutral-200 dark:border-neutral-800 text-neutral-500"
+                                  >
+                                    {lbl}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          <Link
+                            href={`/tasks/new?repo=${encodeURIComponent(activeRepo.id)}&issue=${i.number}`}
+                            className="shrink-0 px-2.5 py-1 rounded border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-xs font-medium text-neutral-800 dark:text-neutral-200 transition-colors"
+                          >
+                            Fix Issue
+                          </Link>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="p-12 text-center text-xs text-neutral-500">
+                Select a repository to view details and open issues.
+              </div>
+            )}
+          </div>
         </div>
-      )}
-    </div>
+      </div>
+    </ProtectedRoute>
   );
 }

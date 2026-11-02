@@ -6,16 +6,13 @@ import {
   MeResponse,
   RepositoryListResponse,
   TaskListResponse,
-  TaskResponse,
-  TokenResponse,
-} from "@/types";
+  TaskResponse} from "@/types";
 
-const API_BASE_URL =
+export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000/api/v1";
 
 const HEALTH_URL =
   process.env.NEXT_PUBLIC_HEALTH_URL || API_BASE_URL.replace(/\/api\/v1\/?$/, "/health");
-
 
 const TOKEN_KEY = "gitresolve_access_token";
 const USER_KEY = "gitresolve_user_meta";
@@ -36,36 +33,23 @@ export class ApiError extends Error {
 
 export function getAuthToken(): string | null {
   if (typeof window === "undefined") return null;
-  return sessionStorage.getItem(TOKEN_KEY);
+  return sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem(TOKEN_KEY);
 }
 
 export function setAuthToken(token: string): void {
   if (typeof window === "undefined") return;
   sessionStorage.setItem(TOKEN_KEY, token);
+  localStorage.setItem(TOKEN_KEY, token);
   window.dispatchEvent(new Event("auth_change"));
 }
 
 export function clearAuthToken(): void {
   if (typeof window === "undefined") return;
   sessionStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(TOKEN_KEY);
   sessionStorage.removeItem(USER_KEY);
+  localStorage.removeItem(USER_KEY);
   window.dispatchEvent(new Event("auth_change"));
-}
-
-export function getStoredUser(): { userId: string; githubLogin: string } | null {
-  if (typeof window === "undefined") return null;
-  const raw = sessionStorage.getItem(USER_KEY);
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-
-export function setStoredUser(user: { userId: string; githubLogin: string }): void {
-  if (typeof window === "undefined") return;
-  sessionStorage.setItem(USER_KEY, JSON.stringify(user));
 }
 
 async function request<T>(
@@ -123,33 +107,11 @@ async function request<T>(
   return body as T;
 }
 
-// --- Auth Endpoints ---
-
-export async function loginWithDevToken(
-  userId = "123456",
-  githubLogin = "dev_user"
-): Promise<TokenResponse> {
-  if (process.env.NODE_ENV === "production" && process.env.NEXT_PUBLIC_ENABLE_DEV_AUTH !== "true") {
-    throw new ApiError("Development login is disabled. Sign in with GitHub.", "auth_unavailable", 403);
-  }
-  const data = await request<TokenResponse>("/auth/dev-token", {
-    method: "POST",
-    body: JSON.stringify({ userId, githubLogin }),
-  });
-  setAuthToken(data.accessToken);
-  setStoredUser({ userId, githubLogin });
-  return data;
-}
-
-export async function ensureDevAuthenticated(): Promise<string> {
-  const existing = getAuthToken();
-  if (existing) return existing;
-  const storedUser = getStoredUser();
-  const data = await loginWithDevToken(
-    storedUser?.userId || "123456",
-    storedUser?.githubLogin || "dev_aakash"
-  );
-  return data.accessToken;
+// GitHub authorization uses the backend's existing session contract.
+export function connectGitHub(): void {
+  // This route belongs to the external FastAPI server, not the Next.js router.
+  const destination = new URL(`${API_BASE_URL}/auth/github/login`);
+  window.location.assign(destination.href);
 }
 
 export async function getMe(): Promise<MeResponse> {
@@ -170,7 +132,7 @@ export async function listIssues(repoId: string): Promise<IssueListResponse> {
 
 export async function createTask(
   repoId: string,
-  issueNumber: number,
+  source: number | string,
   idempotencyKey?: string
 ): Promise<TaskResponse> {
   const headers: Record<string, string> = {};
@@ -181,7 +143,7 @@ export async function createTask(
   return request<TaskResponse>("/tasks", {
     method: "POST",
     headers,
-    body: JSON.stringify({ repoId, issueNumber }),
+    body: JSON.stringify(typeof source === "string" ? { repoId, prompt: source } : { repoId, issueNumber: source }),
   });
 }
 
@@ -251,7 +213,9 @@ export async function getArtifact(
 
 // --- Health ---
 
-export async function checkBackendHealth(): Promise<{ status: string }> {
+export interface BackendHealth { status: string; worker?: { status: string; agentMode: string } }
+
+export async function checkBackendHealth(): Promise<BackendHealth> {
   try {
     const res = await fetch(HEALTH_URL);
     if (!res.ok) return { status: "unhealthy" };

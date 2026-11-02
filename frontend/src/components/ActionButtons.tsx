@@ -4,20 +4,23 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { TaskResponse } from "@/types";
 import { approveTask, cancelTask, rejectTask, startTask } from "@/lib/api";
-import { AlertTriangle, CheckCircle, GitPullRequest, Loader2, Play, RefreshCw, XCircle } from "lucide-react";
+import { AlertTriangle, GitPullRequest, Loader2, Play, RefreshCw, XCircle } from "lucide-react";
 
 interface ActionButtonsProps {
   task: TaskResponse;
   reviewedDiffHash: string | null;
+  onReviewDiff: () => void;
   onActionSuccess: (updatedTask: TaskResponse) => void;
 }
 
-export function ActionButtons({ task, reviewedDiffHash, onActionSuccess }: ActionButtonsProps) {
+export function ActionButtons({ task, reviewedDiffHash, onReviewDiff, onActionSuccess }: ActionButtonsProps) {
   const router = useRouter();
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const actions = task.availableActions || [];
+  const canApprove = Boolean(task.finalDiffHash && reviewedDiffHash === task.finalDiffHash);
+  const needsDiffReview = (actions.includes("approve") || actions.includes("retry_pr")) && !canApprove;
 
   const handleStart = async () => {
     try {
@@ -99,6 +102,16 @@ export function ActionButtons({ task, reviewedDiffHash, onActionSuccess }: Actio
 
   return (
     <div className="flex flex-col gap-2">
+      {needsDiffReview && (
+        <div className="max-w-sm space-y-2 text-xs" role="status">
+          <p className="text-neutral-500 dark:text-neutral-400">
+            The repair is ready. Open the complete proposed changes to enable approval.
+          </p>
+          <button type="button" onClick={onReviewDiff} className="font-medium text-cyan-600 dark:text-cyan-400 underline underline-offset-4 cursor-pointer">
+            Review proposed changes
+          </button>
+        </div>
+      )}
       {error && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-rose-950/80 border border-rose-800 text-rose-300 text-xs">
           <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
@@ -127,7 +140,8 @@ export function ActionButtons({ task, reviewedDiffHash, onActionSuccess }: Actio
         {actions.includes("approve") && (
           <button
             onClick={handleApprove}
-            disabled={!!loadingAction || reviewedDiffHash !== task.finalDiffHash}
+            disabled={!!loadingAction || !canApprove}
+            title={!canApprove ? "Open the complete current diff before approving" : "Approve these reviewed changes and create a draft PR"}
             className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-sm transition-all shadow-md shadow-emerald-900/40 disabled:opacity-50 cursor-pointer"
           >
             {loadingAction === "approve" ? (
@@ -175,7 +189,7 @@ export function ActionButtons({ task, reviewedDiffHash, onActionSuccess }: Actio
         {actions.includes("retry_pr") && (
           <button
             onClick={handleApprove}
-            disabled={!!loadingAction || reviewedDiffHash !== task.finalDiffHash}
+            disabled={!!loadingAction || !canApprove}
             className="flex items-center gap-2 px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-medium text-sm transition-all disabled:opacity-50 cursor-pointer"
           >
             {loadingAction === "approve" ? (

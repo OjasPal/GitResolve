@@ -6,7 +6,9 @@ import subprocess
 import sys
 
 
-def validate_patch(text):
+def validate_patch(text, max_diff_lines=150):
+    if type(max_diff_lines) is not int or not 1 <= max_diff_lines <= 400:
+        raise ValueError("Invalid patch line budget")
     if len(text.encode()) > 100_000:
         raise ValueError("Patch too large")
     names = []
@@ -39,7 +41,7 @@ def validate_patch(text):
             names.append(name)
         elif line.startswith(("+", "-")):
             changes += 1
-    if not names or len(set(names)) != len(names) or len(names) > 5 or changes > 150:
+    if not names or len(set(names)) != len(names) or len(names) > 5 or changes > max_diff_lines:
         raise ValueError("Patch scope exceeds limits")
     return names
 
@@ -48,20 +50,28 @@ def main():
     shutil.copytree("/input", "/workspace", dirs_exist_ok=True)
     patch = Path("/patch.diff").read_text() if Path("/patch.diff").exists() else ""
     if patch:
-        names = validate_patch(patch)
+        names = validate_patch(patch, int(os.environ.get("GITRESOLVE_MAX_DIFF_LINES", "150")))
         for name in names:
             path = Path("/workspace") / name
             if path.exists() and (not path.is_file() or path.stat().st_size > 100_000):
                 raise ValueError("Patch target is not a small regular file")
         env = {"PATH": os.environ["PATH"], "HOME": "/tmp", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"}
         for options in (["--check"], []):
-            subprocess.run(["git", "apply", *options, "/patch.diff"], cwd="/workspace", env=env,
-                           check=True, timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            applied = subprocess.run(["git", "apply", *options, "/patch.diff"], cwd="/workspace", env=env,
+                                     timeout=10, capture_output=True, text=True)
+            if applied.returncode:
+                # The host sanitizes this bounded output before storing/displaying it.
+                print(applied.stderr[:2000], file=sys.stderr)
+                raise ValueError("Git rejected the proposed patch.")
         for name in names:
             path = Path("/workspace") / name
             if path.is_symlink() or path.stat().st_size > 100_000:
                 raise ValueError("Invalid patched file")
     os.chdir("/workspace")
+    if os.environ.get("GITRESOLVE_STREAMLIT_ENTRY"):
+        if sys.argv[1:4] != ["python", "-m", "pytest"]:
+            raise ValueError("Streamlit verification requires pytest.")
+        os.execvp("python", ["python", "-I", "/usr/local/lib/gitresolve_streamlit_pytest.py", *sys.argv[4:]])
     os.execvp(sys.argv[1], sys.argv[1:])
 
 

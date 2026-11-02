@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from app.schemas.common import RequestModel, ResponseModel
 from app.schemas.enums import (
@@ -20,7 +20,16 @@ DIFF_HASH_PATTERN = r"^sha256:[0-9a-f]{64}$"
 # --- Requests ----------------------------------------------------------------
 class CreateTaskRequest(RequestModel):
     repo_id: str = Field(pattern=REPO_ID_PATTERN)
-    issue_number: int = Field(gt=0)
+    issue_number: int | None = Field(default=None, gt=0)
+    prompt: str | None = Field(default=None, min_length=1, max_length=20_000)
+
+    @model_validator(mode="after")
+    def validate_source(self):
+        if self.prompt is not None:
+            self.prompt = self.prompt.strip()
+        if bool(self.prompt) == (self.issue_number is not None):
+            raise ValueError("Provide either a bug description or an existing GitHub issue, exclusively.")
+        return self
 
 
 class ApproveRequest(RequestModel):
@@ -34,7 +43,7 @@ class IssueComment(ResponseModel):
 
 
 class IssueView(ResponseModel):
-    number: int
+    number: int | None
     title: str | None = None
     url: str | None = None
     body: str | None = None
@@ -44,7 +53,7 @@ class IssueView(ResponseModel):
 
 
 class IssueSummary(ResponseModel):
-    number: int
+    number: int | None
     title: str | None = None
     url: str | None = None
     labels: list[str] = Field(default_factory=list)

@@ -1,234 +1,268 @@
 "use client";
 
+import { API_BASE_URL } from "@/lib/api";
+
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useAuth } from "@/context/AuthContext";
+import { useTheme } from "@/context/ThemeContext";
+import { ProtectedRoute } from "@/components/ProtectedRoute";
 import {
   checkBackendHealth,
-  clearAuthToken,
-  getAuthToken,
   getMe,
-  loginWithDevToken,
-} from "@/lib/api";
+  listRepositories} from "@/lib/api";
 import { MeResponse } from "@/types";
 import {
   AlertCircle,
-  CheckCircle2,
-  Key,
+  ExternalLink,
+  FolderGit2,
   LogOut,
+  Moon,
   RefreshCw,
   Server,
   Settings,
-  ShieldCheck,
-  User,
-  UserCheck,
-  Wifi,
-} from "lucide-react";
+  Sun,
+  User} from "lucide-react";
 
 export default function SettingsPage() {
-  const [user, setUser] = useState<MeResponse | null>(null);
+  const router = useRouter();
+  const { user, signOutUser } = useAuth();
+  const { theme, toggleTheme } = useTheme();
+
+  const [profile, setProfile] = useState<MeResponse | null>(null);
+  const [repoCount, setRepoCount] = useState<number>(0);
   const [backendHealth, setBackendHealth] = useState<{ status: string }>({ status: "checking" });
-  const [devUserId, setDevUserId] = useState("123456");
-  const [devLogin, setDevLogin] = useState("dev_aakash");
-  const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const sync = async () => {
-    const health = await checkBackendHealth();
-    setBackendHealth(health);
-    const token = getAuthToken();
-    if (token) {
-      try {
-        const u = await getMe();
-        setUser(u);
-        setDevUserId(u.id);
-        setDevLogin(u.githubLogin);
-      } catch {
-        setUser(null);
-      }
-    } else {
-      setUser(null);
-    }
-  };
-
-  useEffect(() => {
-    let active = true;
-    checkBackendHealth().then((health) => { if (active) setBackendHealth(health); });
-    if (getAuthToken()) {
-      getMe().then((profile) => {
-        if (active) { setUser(profile); setDevUserId(profile.id); setDevLogin(profile.githubLogin); }
-      }).catch(() => { if (active) setUser(null); });
-    }
-    return () => { active = false; };
-  }, []);
-
-  const handleDevLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
     try {
       setLoading(true);
-      setMessage(null);
-      await loginWithDevToken(devUserId, devLogin);
-      await sync();
-      setMessage("Authenticated with development session token successfully!");
-    } catch (err: unknown) {
-      setMessage(err instanceof Error ? err.message : "Failed to generate token");
+      setError(null);
+      const [healthRes, meRes, reposRes] = await Promise.allSettled([
+        checkBackendHealth(),
+        getMe(),
+        listRepositories(),
+      ]);
+
+      if (healthRes.status === "fulfilled") {
+        setBackendHealth(healthRes.value);
+      }
+      const failed = [meRes, reposRes].find((r) => r.status === "rejected");
+      if (failed?.status === "rejected") setError(failed.reason instanceof Error ? failed.reason.message : "Unable to refresh account.");
+      if (meRes.status === "fulfilled") {
+        setProfile(meRes.value);
+      }
+      if (reposRes.status === "fulfilled") {
+        setRepoCount(reposRes.value.items?.length || 0);
+      }
+    } catch {
+      setError("Unable to refresh account settings.");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleSignOut = () => {
-    clearAuthToken();
-    setUser(null);
-    setMessage("Signed out. Cleared local session token.");
+  useEffect(() => {
+    const timer = setTimeout(() => sync(), 0);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const handleSignOut = async () => {
+    await signOutUser();
+    router.push("/login");
   };
 
+  const githubAppUrl =
+    process.env.NEXT_PUBLIC_GITHUB_APP_URL || `${API_BASE_URL}/auth/github/login`;
+
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2.5">
-          <Settings className="w-6 h-6 text-sky-400" />
-          <span>Platform Settings & Identity</span>
-        </h1>
-        <p className="text-sm text-slate-400 mt-0.5">
-          Manage your GitHub authentication status, development session tokens, and connection configurations
-        </p>
-      </div>
-
-      {message && (
-        <div className="p-4 rounded-xl bg-slate-900 border border-sky-500/50 text-sky-300 text-xs flex items-center gap-2.5">
-          <CheckCircle2 className="w-4 h-4 text-sky-400 shrink-0" />
-          <span>{message}</span>
+    <ProtectedRoute>
+      <div className="space-y-8 max-w-4xl mx-auto py-2">
+        {/* Header */}
+        <div className="border-b border-neutral-200 dark:border-neutral-800 pb-4">
+          <h1 className="text-2xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
+            <Settings className="w-6 h-6 text-neutral-600 dark:text-neutral-400" />
+            <span>Settings & Preferences</span>
+          </h1>
+          <p className="text-sm text-neutral-500 dark:text-neutral-400 mt-0.5">
+            Manage your account identity, GitHub App connection, and workspace preferences
+          </p>
         </div>
-      )}
 
-      {/* Backend Status Card */}
-      <div className="p-6 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-slate-800 flex items-center justify-center text-sky-400">
-              <Server className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="text-sm font-bold text-white">Backend API Server</h3>
-              <p className="text-xs text-slate-400 font-mono">
-                {process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000/api/v1"}
-              </p>
-
-            </div>
+        {/* Message / Error banners */}
+        {error && (
+          <div className="p-3.5 rounded-lg border border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400 text-xs flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{error}</span>
           </div>
+        )}
 
-          <span
-            className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-bold border ${
-              backendHealth.status === "ok"
-                ? "bg-emerald-950/60 border-emerald-800 text-emerald-300"
-                : "bg-rose-950/60 border-rose-800 text-rose-300"
-            }`}
-          >
-            <span
-              className={`w-2 h-2 rounded-full ${
-                backendHealth.status === "ok" ? "bg-emerald-400 animate-ping" : "bg-rose-400"
-              }`}
-            />
-            <span>{backendHealth.status.toUpperCase()}</span>
-          </span>
-        </div>
-      </div>
-
-      {/* Current User Card */}
-      <div className="p-6 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-4">
-        <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
-          <UserCheck className="w-4 h-4 text-sky-400" />
-          <span>Active Session Details</span>
-        </h2>
-
-        {user ? (
-          <div className="flex items-center justify-between p-4 rounded-xl bg-slate-950 border border-slate-800">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-sky-400 font-bold overflow-hidden">
-                {user.avatarUrl ? (
-                  <img src={user.avatarUrl} alt={user.githubLogin} className="w-full h-full object-cover" />
-                ) : (
-                  <User className="w-5 h-5" />
-                )}
-              </div>
-              <div>
-                <p className="text-sm font-bold text-white flex items-center gap-2">
-                  <span>{user.githubLogin}</span>
-                  <span className="px-1.5 py-0.2 rounded bg-sky-500/20 text-sky-400 text-[10px] font-mono">
-                    ID: {user.id}
-                  </span>
-                </p>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  {user.activeTaskId ? (
-                    <span className="text-amber-400">Active Task: {user.activeTaskId}</span>
-                  ) : (
-                    <span className="text-emerald-400">Active Task Slot: Available (0/1)</span>
-                  )}
-                </p>
-              </div>
-            </div>
-
+        {/* Section 1: Account Profile */}
+        <div className="border border-neutral-200 dark:border-neutral-800 rounded-xl p-6 bg-white dark:bg-neutral-900 shadow-sm space-y-4">
+          <div className="flex items-center justify-between border-b border-neutral-100 dark:border-neutral-800 pb-3">
+            <h2 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
+              <User className="w-4 h-4 text-neutral-500" />
+              <span>User Profile</span>
+            </h2>
             <button
               onClick={handleSignOut}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-rose-950/60 border border-slate-700 hover:border-rose-800 text-slate-300 hover:text-rose-300 text-xs font-medium transition-all cursor-pointer"
+              className="text-xs font-medium text-red-600 dark:text-red-400 hover:underline flex items-center gap-1.5 cursor-pointer"
             >
               <LogOut className="w-3.5 h-3.5" />
               <span>Sign Out</span>
             </button>
           </div>
-        ) : (
-          <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-400">
-            No active session found. Use the dev session generator below to mint a local session token.
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+            <div className="p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 space-y-1">
+              <span className="text-neutral-500 font-mono">Display Name</span>
+              <p className="font-semibold text-neutral-900 dark:text-neutral-100">
+                {user?.displayName || profile?.githubLogin || "Developer"}
+              </p>
+            </div>
+
+            <div className="p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 space-y-1">
+              <span className="text-neutral-500 font-mono">Email Address</span>
+              <p className="font-semibold text-neutral-900 dark:text-neutral-100">
+                {user?.email || "No email associated"}
+              </p>
+            </div>
+
+            <div className="p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 space-y-1">
+              <span className="text-neutral-500 font-mono">Account Provider</span>
+              <p className="font-semibold text-neutral-900 dark:text-neutral-100 uppercase font-mono">
+                {user?.providerId || "Local / Session"}
+              </p>
+            </div>
+
+            <div className="p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 space-y-1">
+              <span className="text-neutral-500 font-mono">User ID</span>
+              <p className="font-mono text-neutral-900 dark:text-neutral-100 truncate">
+                {user?.uid || profile?.id || "N/A"}
+              </p>
+            </div>
           </div>
-        )}
+        </div>
+
+        {/* Section 2: GitHub App Installation */}
+        <div className="border border-neutral-200 dark:border-neutral-800 rounded-xl p-6 bg-white dark:bg-neutral-900 shadow-sm space-y-4">
+          <div className="border-b border-neutral-100 dark:border-neutral-800 pb-3">
+            <h2 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
+              <FolderGit2 className="w-4 h-4 text-neutral-500" />
+              <span>GitHub App Integration</span>
+            </h2>
+            <p className="text-xs text-neutral-500 mt-0.5">
+              Repository access is granted exclusively through our GitHub App installation on your GitHub account or organization
+            </p>
+          </div>
+
+          <div className="p-4 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <span
+                  className={`w-3 h-3 rounded-full ${
+                    profile?.githubLogin || repoCount > 0 ? "bg-emerald-500" : "bg-neutral-400"
+                  }`}
+                />
+                <div>
+                  <p className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+                    {profile?.githubLogin ? `Connected as @${profile.githubLogin}` : repoCount > 0 ? "GitHub App Connected" : "Not Connected"}
+                  </p>
+                  <p className="text-xs text-neutral-500">
+                    {repoCount} authorized repositor{repoCount === 1 ? "y" : "ies"} accessible to GitResolve
+                  </p>
+                </div>
+              </div>
+
+              <a
+                href={githubAppUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg bg-neutral-900 hover:bg-neutral-800 dark:bg-neutral-100 dark:hover:bg-neutral-200 text-white dark:text-neutral-900 text-xs font-semibold transition-colors shrink-0"
+              >
+                <span>Manage in GitHub</span>
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            </div>
+
+            <p className="text-xs text-neutral-500 leading-relaxed border-t border-neutral-200 dark:border-neutral-800 pt-3">
+              To add or revoke repositories, visit your GitHub account settings &gt; Applications &gt; GitResolve. Changes made on GitHub take effect immediately.
+            </p>
+          </div>
+        </div>
+
+        {/* Section 3: Preferences (Light/Dark Theme) */}
+        <div className="border border-neutral-200 dark:border-neutral-800 rounded-xl p-6 bg-white dark:bg-neutral-900 shadow-sm space-y-4">
+          <div className="border-b border-neutral-100 dark:border-neutral-800 pb-3">
+            <h2 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
+              <Sun className="w-4 h-4 text-neutral-500" />
+              <span>Appearance & Preferences</span>
+            </h2>
+          </div>
+
+          <div className="flex items-center justify-between p-3 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950">
+            <div className="space-y-0.5">
+              <p className="text-xs font-semibold text-neutral-900 dark:text-neutral-100">
+                Interface Theme
+              </p>
+              <p className="text-xs text-neutral-500">
+                Current mode: <strong className="capitalize">{theme}</strong>
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={toggleTheme}
+              className="px-3 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-xs font-medium text-neutral-800 dark:text-neutral-200 flex items-center gap-2 transition-colors cursor-pointer"
+            >
+              {theme === "dark" ? (
+                <>
+                  <Sun className="w-3.5 h-3.5" />
+                  <span>Switch to Light</span>
+                </>
+              ) : (
+                <>
+                  <Moon className="w-3.5 h-3.5" />
+                  <span>Switch to Dark</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Section 4: Backend Infrastructure Health */}
+        <div className="border border-neutral-200 dark:border-neutral-800 rounded-xl p-6 bg-white dark:bg-neutral-900 shadow-sm space-y-4">
+          <div className="border-b border-neutral-100 dark:border-neutral-800 pb-3 flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
+              <Server className="w-4 h-4 text-neutral-500" />
+              <span>Backend & Agent Infrastructure</span>
+            </h2>
+            <button
+              onClick={sync}
+              className="text-xs text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 flex items-center gap-1 cursor-pointer"
+            >
+              <RefreshCw className={`w-3 h-3 ${loading ? "animate-spin" : ""}`} />
+              <span>Re-check</span>
+            </button>
+          </div>
+
+          <div className="p-3.5 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 text-xs flex items-center justify-between font-mono">
+            <span className="text-neutral-500">FastAPI Server Health:</span>
+            <span
+              className={`font-semibold ${
+                backendHealth.status === "ok" || backendHealth.status === "healthy"
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : "text-amber-600 dark:text-amber-400"
+              }`}
+            >
+              {backendHealth.status.toUpperCase()}
+            </span>
+          </div>
+        </div>
+
+
       </div>
-
-      {/* Dev Token Minting Form */}
-      <form onSubmit={handleDevLogin} className="p-6 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-4">
-        <div>
-          <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
-            <Key className="w-4 h-4 text-purple-400" />
-            <span>Developer Local Session Switcher</span>
-          </h2>
-          <p className="text-xs text-slate-500 mt-1">
-            Calls <code className="text-sky-400">POST /api/v1/auth/dev-token</code> to simulate different GitHub users locally.
-          </p>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-slate-300">User ID (numeric string):</label>
-            <input
-              type="text"
-              value={devUserId}
-              onChange={(e) => setDevUserId(e.target.value)}
-              className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-200 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-sky-500/40"
-              required
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-slate-300">GitHub Login Username:</label>
-            <input
-              type="text"
-              value={devLogin}
-              onChange={(e) => setDevLogin(e.target.value)}
-              className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-200 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-sky-500/40"
-              required
-            />
-          </div>
-        </div>
-
-        <div className="pt-2 flex justify-end">
-          <button
-            type="submit"
-            disabled={loading}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs shadow-md shadow-purple-900/40 cursor-pointer disabled:opacity-50"
-          >
-            {loading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
-            <span>Mint Dev Session Token</span>
-          </button>
-        </div>
-      </form>
-    </div>
+    </ProtectedRoute>
   );
 }

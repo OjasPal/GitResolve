@@ -1,32 +1,29 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 @layer base {
   :root {
-    --background: #090d16;
-    --foreground: #f1f5f9;
-    --card: #0f172a;
-    --card-foreground: #f8fafc;
-    --popover: #0f172a;
-    --popover-foreground: #f8fafc;
-    --primary: #38bdf8;
-    --primary-foreground: #090d16;
-    --secondary: #1e293b;
-    --secondary-foreground: #cbd5e1;
-    --muted: #1e293b;
-    --muted-foreground: #94a3b8;
-    --accent: #2563eb;
-    --accent-foreground: #f8fafc;
-    --destructive: #ef4444;
-    --destructive-foreground: #f8fafc;
-    --border: #334155;
-    --input: #1e293b;
-    --ring: #38bdf8;
+    --font-geist-sans: Arial, Helvetica, sans-serif;
+    --font-geist-mono: Consolas, "Courier New", monospace;
+    --background: #ffffff;
+    --foreground: #0a0a0a;
+    --card: #ffffff;
+    --card-foreground: #0a0a0a;
+    --border: #e5e5e5;
+    --input: #e5e5e5;
+  }
+
+  .dark {
+    --background: #0a0a0a;
+    --foreground: #fafafa;
+    --card: #121212;
+    --card-foreground: #fafafa;
+    --border: #262626;
+    --input: #262626;
   }
 }
 
 body {
-  background-color: #090d16;
-  color: #f1f5f9;
   font-family: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   overflow-x: hidden;
 }
@@ -38,32 +35,14 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: #090d16;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: #737373;
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #475569;
-}
-
-/* Glowing dot animations */
-@keyframes pulseGlow {
-  0%, 100% {
-    opacity: 1;
-    transform: scale(1);
-    box-shadow: 0 0 10px rgba(56, 189, 248, 0.6);
-  }
-  50% {
-    opacity: 0.7;
-    transform: scale(1.15);
-    box-shadow: 0 0 18px rgba(56, 189, 248, 0.9);
-  }
-}
-
-.pulse-glow {
-  animation: pulseGlow 2s infinite ease-in-out;
+  background: #525252;
 }

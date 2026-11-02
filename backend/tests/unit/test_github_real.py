@@ -45,7 +45,7 @@ def approved(env):
         'command': ['python', '-m', 'pytest'], 'baseSha': task['baseSha'], 'diffHash': task['finalDiffHash']}
     diff = env.store.get(f"tasks/{task['id']}/artifacts/final_diff")['content']
     api = MockAPI()
-    gateway = SimpleNamespace(authorized_client=lambda *a, **kw:
+    gateway = SimpleNamespace(store=env.store, authorized_client=lambda *a, **kw:
                               (SimpleNamespace(full_name=task['repoFullName']), api))
     return task, diff, api, GitHubPullRequestCreator(gateway)
 
@@ -72,6 +72,10 @@ def test_publication_writes_only_approved_tree_then_draft_pr(env):
     assert [p.split('/')[-1] for p, _ in writes] == ['trees', 'commits', 'refs', 'pulls']
     assert writes[0][1]['tree'][0]['content'].endswith('.strip("-")\n')
     assert writes[-1][1]['draft'] is True and writes[-1][1]['base'] == 'main'
+    assert 'tsk_' not in writes[1][1]['message'] and len(writes[1][1]['message']) <= 72
+    assert result.branch.startswith('gitresolve-agent/') and 'tsk_' not in result.branch
+    assert writes[-1][1]['title'] == writes[1][1]['message']
+    assert writes[1][1]['author']['name'] == 'gitresolve-agent'
     assert events and not any('/merge' in path for _, path, _ in api.calls)
 
 
@@ -100,6 +104,15 @@ def test_publication_retry_reuses_identified_pr_without_writing(env):
     tree[0]['sha'] = 'tampered'
     with pytest.raises(PullRequestError):
         creator.create(task, diff)
+
+
+def test_publication_uses_reviewed_summary_instead_of_the_user_prompt(env):
+    task, diff, api, creator = approved(env)
+    task["issue"]["title"] = "Improve the UI. Do not add React or Next.js."
+    task["finalDiffSummary"]["commitMessage"] = "fix: Restore readable quiz cards"
+    creator.create(task, diff)
+    commit = next(kw["json"] for method, path, kw in api.calls if method == "POST" and path.endswith("/git/commits"))
+    assert commit["message"] == "fix: Restore readable quiz cards"
 
 
 def test_gateway_checks_fresh_user_permission_and_scopes_tokens(monkeypatch):

@@ -58,7 +58,7 @@ def test_plan_phase_runs_the_real_graph(env, monkeypatch):
     assert task["plan"]["steps"] == ["Inspect parse_duration.", "Add a regression test."]
 
 
-def test_llm_failure_and_missing_execute_are_reported_not_crashed(env, monkeypatch):
+def test_llm_failure_and_missing_snapshot_are_reported_not_crashed(env, monkeypatch):
     def failing(**kwargs):
         raise RuntimeError("Simulated provider failure")
 
@@ -76,7 +76,7 @@ def test_llm_failure_and_missing_execute_are_reported_not_crashed(env, monkeypat
     tid = env.create(h, 2).json()["id"]
     env.run_worker()
     env.post(h, tid, "start")
-    env.run_worker()  # execute() is not implemented in the prototype yet
+    env.run_worker()  # fixture has no authorized pinned repository snapshot
     task = env.get(h, tid)
-    assert task["status"] == "failed_infra" and task["failure"]["code"] == "internal_error"
+    assert task["status"] == "failed_infra" and task["failure"]["code"] == "sandbox_error"
     assert task["failure"]["phase"] == "execute"

@@ -9,4 +9,4 @@ def build_store(settings: Settings) -> Store:
         return FirestoreStore(settings.gcp_project, settings.firestore_database)
     from app.services.store.memory import MemoryStore
 
-    return MemoryStore()
+    return MemoryStore(state_path=settings.local_state_path if settings.environment == "local" else None)

@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class ExecutionRequest(BaseModel):
@@ -14,6 +14,38 @@ class ExecutionRequest(BaseModel):
     timeout_seconds: int = Field(default=60, ge=1, le=300)
     max_output_bytes: int = Field(default=1_000_000, ge=1_000, le=1_048_576)
     patch: str = Field(default="", max_length=100_000)
+    max_diff_lines: int = Field(default=150, ge=1, le=400)
+    profile: Literal["python", "streamlit"] = "python"
+    ui_entrypoint: str = Field(default="", max_length=200)
+    require_ui_checks: bool = False
+    require_ui_interaction: bool = False
+    require_ui_report: bool = False
+    require_ui_answers: bool = False
+
+    @field_validator("ui_entrypoint")
+    @classmethod
+    def safe_entrypoint(cls, value):
+        if value and (value.startswith("/") or ".." in value.split("/") or any(c in value for c in "\\:\r\n\x00") or not value.endswith(".py")):
+            raise ValueError("Invalid Streamlit entry point.")
+        return value
+
+    @model_validator(mode="after")
+    def approved_task_scope(self):
+        if self.profile == "streamlit" and not self.ui_entrypoint:
+            raise ValueError("Streamlit verification requires an entry point.")
+        if self.require_ui_checks and self.profile != "streamlit":
+            raise ValueError("UI verification requires the Streamlit profile.")
+        if self.max_diff_lines > 150:
+            import json
+            from pathlib import Path
+            grants_file = Path(__file__).resolve().parents[1] / ".diagnostics" / "task_scope_grants.json"
+            try:
+                grant = json.loads(grants_file.read_text(encoding="utf-8")).get(self.execution_id, {})
+            except (OSError, ValueError):
+                grant = {}
+            if grant.get("repo_url") != self.repo_url or grant.get("max_diff_lines") != self.max_diff_lines:
+                raise ValueError("Expanded change budget requires an explicit local grant for this exact task and repository.")
+        return self
 
     @field_validator("repo_url")
     @classmethod

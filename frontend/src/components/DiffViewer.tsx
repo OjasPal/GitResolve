@@ -48,14 +48,11 @@ export function DiffViewer({ diffText, filename }: DiffViewerProps) {
               const isHdr = line.startsWith("@@") || line.startsWith("---") || line.startsWith("+++");
 
               let rowClass = "text-slate-300 hover:bg-slate-900/50";
-              let linePrefix = " ";
 
               if (isAdd) {
                 rowClass = "bg-emerald-950/30 text-emerald-300 border-l-2 border-emerald-500";
-                linePrefix = "+";
               } else if (isDel) {
                 rowClass = "bg-rose-950/30 text-rose-300 border-l-2 border-rose-500";
-                linePrefix = "-";
               } else if (isHdr) {
                 rowClass = "text-sky-400/90 bg-sky-950/20 font-semibold";
               }

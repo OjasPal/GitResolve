@@ -70,6 +70,7 @@ def test_fixture_api_docker_approval_publication(env, tmp_path):
                 {'filesChanged': 2, 'linesAdded': 4, 'linesRemoved': 1, 'files': ['calc.py', 'test_regression.py']},
                 verification={'reproduced': True, 'regressionPassed': True, 'testsRun': 2, 'newFailures': []})
     env.worker.github = Gateway()
+    env.worker.github.store = env.store
     env.worker.agent = TestRepair()
     env.worker.pr_creator = GitHubPullRequestCreator(env.worker.github)
     headers = env.headers()
@@ -84,7 +85,7 @@ def test_fixture_api_docker_approval_publication(env, tmp_path):
     assert env.run_worker()
     task = env.get(headers, tid)
     assert task['status'] == 'completed', task
-    assert task['pr']['url'].endswith('/pull/7') and task['pr']['branch'].startswith('gitresolve/')
+    assert task['pr']['url'].endswith('/pull/7') and task['pr']['branch'].startswith('gitresolve-agent/')
     artifact = env.client.get(f'/api/v1/tasks/{tid}/artifacts/github_pr', headers=headers).json()
     assert artifact['type'] == 'pr_result' and task['pr']['url'] in artifact['content']
 
