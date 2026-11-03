@@ -228,6 +228,8 @@ def run_repair(task, ctx, router=None):
                 except (UnicodeError, OSError):
                     continue
     report = task.issue.get("body") or task.issue.get("title") or ""
+    from app.agent.attachment_context import attachment_context
+    report += attachment_context(task, ctx)
     entrypoint = streamlit_entrypoint(originals, report)
     if entrypoint:
         ctx.sandbox_profile = "streamlit"
@@ -338,7 +340,11 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
         ctx.event(EventType.TOOL_CALL, "Applying the proposed fix only inside a fresh Docker sandbox.")
         ctx.stage(TaskStage.TEST)
         ctx.require_ui_checks = bool(entrypoint)
-        final = ctx.execute(commit_sha=task.base_sha, command=command, patch=proposal.final_diff)
+        ctx.sandbox_only_tests = True
+        try:
+            final = ctx.execute(commit_sha=task.base_sha, command=command, patch=proposal.final_diff)
+        finally:
+            ctx.sandbox_only_tests = False
         ctx.require_ui_checks = False
         tests = re.findall(r"\b(\d+) passed\b", final.stdout)
         transcript = "BASELINE\n" + output(baseline) + "\nREPRODUCTION\n" + output(reproduction) + "\nFIXED\n" + output(final)
@@ -392,8 +398,13 @@ Return QualityReview."""
             ctx.event(EventType.POLICY_CHECK, "Quality review found unmet requirements. Revising the patch within the remaining attempt budget.")
             continue
         ctx.stage(TaskStage.POLICY_GATE)
-        return ExecuteResult("fix_ready", final_diff=proposal.final_diff, final_tests=transcript,
-                             summary={"filesChanged": len(diff_sections(proposal.final_diff)), "commitMessage": review.commit_message,
+        from app.services.publication_patch import publication_patch
+        publishable = publication_patch(proposal.final_diff)
+        ctx.event(EventType.INFO, "Verification complete. Newly generated regression tests remain sandbox-only and are excluded from the reviewable PR patch.")
+        return ExecuteResult("fix_ready", final_diff=publishable, final_tests=transcript,
+                             summary={"filesChanged": len(diff_sections(publishable)),
+                                      "linesAdded": sum(line.startswith("+") and not line.startswith("+++") for line in publishable.splitlines()),
+                                      "linesRemoved": sum(line.startswith("-") and not line.startswith("---") for line in publishable.splitlines()), "commitMessage": review.commit_message,
                                       "qualityReview": review.model_dump(), "uiVerification": "Streamlit AppTest and Markdown render checks; visual design requires human review" if entrypoint else "Not a detected Streamlit UI repair"},
                              verification={"reproduced": True, "regressionPassed": True,
                                            "testsRun": sum(map(int, tests)), "newFailures": []})

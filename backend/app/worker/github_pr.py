@@ -30,12 +30,22 @@ class GitHubPullRequestCreator:
             raise PullRequestError(FailureCode.POLICY_VIOLATION,
                                    'Exact diff approval and passing Docker pytest execution are required.')
         try:
-            validate_fix(diff, task['limits'], task.get('verification') or {}, task['baseSha'])
+            from app.services.publication_patch import validate_publication
+            validate_publication(diff, task['limits'], task.get('verification') or {}, task['baseSha'], receipt)
             checkpoint()
             repo, client = self.gateway.authorized_client(task['userId'], task['repoId'], write=True)
             if repo.full_name != task['repoFullName']:
                 raise GitHubClientError('access_revoked')
-            path = f'/repos/{repo.full_name}'
+            # Resolve the real App bot rather than attributing commits to an unrelated username.
+            app_client = __import__("githubapp.client", fromlist=["GitHubClient"]).GitHubClient(self.gateway.auth._generate_jwt())
+            app = app_client._get('/app')
+            if str(app.get('id')) != str(self.gateway.settings.github_app_id):
+                raise GitHubClientError('github_auth_error')
+            bot = client._get('/users/' + quote(app['slug'] + '[bot]', safe=''))
+            if bot.get('type') != 'Bot' or bot.get('login') != app['slug'] + '[bot]':
+                raise GitHubClientError('github_auth_error')
+            identity = {'name': bot['login'], 'email': str(bot['id']) + '+' + bot['login'] + '@users.noreply.github.com', 'date': task['createdAt'].isoformat()}
+            path = f'/repos/{repo.full_name}' 
             subject = publication_subject(task, diff)
             branch = reserve_branch(self.gateway.store, task, subject, digest)
             subject = self.gateway.store.get("tasks/" + task["id"])["publication"]["commitMessage"]
@@ -88,10 +98,8 @@ class GitHubPullRequestCreator:
                 'message': subject,
                 'tree': new_tree['sha'], 'parents': [task['baseSha']],
                 # Stable identity/date make retries produce the same commit SHA.
-                'author': {'name': 'gitresolve-agent', 'email': 'gitresolve@users.noreply.github.com',
-                           'date': task['createdAt'].isoformat()},
-                'committer': {'name': 'gitresolve-agent', 'email': 'gitresolve@users.noreply.github.com',
-                              'date': task['createdAt'].isoformat()},
+                'author': identity,
+                'committer': identity,
             })
             checkpoint()
             try:

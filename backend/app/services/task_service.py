@@ -163,10 +163,10 @@ class TaskService:
         return self._github(lambda: self.github.list_open_issues(user_id, repo_id))
 
     # --- Create -------------------------------------------------------------------
-    def _replay(self, existing: Doc, user_id: str, repo_id: str, issue_number: int | None, prompt: str | None = None) -> Doc:
+    def _replay(self, existing: Doc, user_id: str, repo_id: str, issue_number: int | None, prompt: str | None = None, attachment_ids: list[str] | None = None) -> Doc:
         if existing["userId"] != user_id:
             raise not_found()
-        if (existing["repoId"] != repo_id or existing["issue"]["number"] != issue_number
+        if (existing.get("attachmentIds", []) != (attachment_ids or []) or existing["repoId"] != repo_id or existing["issue"]["number"] != issue_number
                 or (issue_number is None and existing["issue"].get("body") != prompt)):
             raise ApiError(
                 409,
@@ -177,7 +177,7 @@ class TaskService:
 
     def create_task(
         self, user_id: str, repo_id: str, issue_number: int | None, idempotency_key: str | None,
-        *, prompt: str | None = None
+        *, prompt: str | None = None, attachment_ids: list[str] | None = None
     ) -> tuple[Doc, bool]:
         """Returns (task, created). `created` is False for an idempotent replay."""
         prompt = prompt.strip() if prompt is not None else None
@@ -187,8 +187,11 @@ class TaskService:
         if idempotency_key:
             existing = self.store.get(task_path(task_id))
             if existing is not None:
-                return self._replay(existing, user_id, repo_id, issue_number, prompt), False
+                return self._replay(existing, user_id, repo_id, issue_number, prompt, attachment_ids), False
 
+        if attachment_ids:
+            from app.services.attachments import AttachmentStore
+            AttachmentStore(self.settings, self.store).read(user_id, attachment_ids)
         now = self.clock()
         midnight = datetime.combine(now.date(), time.min, tzinfo=timezone.utc)
         historical_count = self.store.count_user_tasks_since(user_id, midnight)
@@ -227,6 +230,7 @@ class TaskService:
             "baseSha": None,
             "issue": issue_doc,
             "idempotencyKey": idempotency_key,
+            "attachmentIds": attachment_ids or [],
             "status": TaskStatus.QUEUED.value,
             "stage": TaskStage.INTAKE.value,
             "statusUpdatedAt": now,
@@ -282,7 +286,7 @@ class TaskService:
         def fn(txn: Txn) -> tuple[Doc, bool]:
             existing = txn.get(task_path(task_id))
             if existing is not None:
-                return self._replay(existing, user_id, repo_id, issue_number, prompt), False
+                return self._replay(existing, user_id, repo_id, issue_number, prompt, attachment_ids), False
             user = txn.get(user_path(user_id))
             holder_id = user.get("activeTaskId") if user else None
             if holder_id:
@@ -322,7 +326,7 @@ class TaskService:
             existing = self.store.get(task_path(task_id))
             if existing is None:
                 raise
-            return self._replay(existing, user_id, repo_id, issue_number, prompt), False
+            return self._replay(existing, user_id, repo_id, issue_number, prompt, attachment_ids), False
         self.store.set(f"repositories/{repo_id}", repo_doc)
         return result
 

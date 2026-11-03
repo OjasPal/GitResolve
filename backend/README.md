@@ -134,3 +134,41 @@ All CPU/memory, network, filesystem and protected-path controls remain enforced.
 AppTest simulates Streamlit, not a browser screenshot: visual design and responsive
 layout still need human review. Other UI frameworks need their own testing profile;
 this does not add browser verification for React or other frontends.
+
+
+## Repair context attachments
+
+The composer accepts up to four PNG/JPEG/WEBP images (5 MB each, 8 megapixels,
+non-animated) and UTF-8 TXT/LOG/MD/JSON/YAML files (128 KB each), 10 MB total.
+Authenticated `POST /api/v1/attachments?filename=...` accepts raw bytes and returns
+an owner-scoped ID. Task creation optionally accepts `attachmentIds`; existing
+prompt/issue payloads remain valid. Task retries must retain the same IDs.
+
+Run the official ClamAV scanner locally before uploading:
+
+```powershell
+docker run -d --name gitresolve-attachment-scanner --restart unless-stopped --memory 1536m --cpus 1 -p 127.0.0.1:3310:3310 --mount source=gitresolve-clamav-db,target=/var/lib/clamav clamav/clamav:stable
+```
+
+The scanner downloads/updates its signatures and may need time to become ready.
+Do not expose its unauthenticated TCP port publicly. Optional backend variables:
+`ATTACHMENT_SCANNER_HOST`, `ATTACHMENT_SCANNER_PORT`, `ATTACHMENT_STORAGE_PATH`.
+Missing/unavailable/erroring scanners reject uploads with 503; no bypass exists.
+Keep antivirus signatures current. Scanning reduces risk and does not prove a file harmless.
+
+Original bytes are scanned before image decoding. Images are signature-checked,
+pixel-bounded, reduced to 1600px and re-encoded as PNG without metadata. Uploads
+use random filenames, restrictive creation permissions and a private directory
+outside public/static paths, default `.diagnostics/uploads`. Restrict that volume
+with OS permissions. API and worker must share the same private upload volume;
+separate Cloud Run/VM deployment needs shared private storage before enabling this
+feature. The API sweeps expired files every ten minutes (24-hour retention).
+Unreferenced upload metadata contains no source bytes and should have matching
+Firestore TTL retention when deployed.
+
+Text and vision-derived observations are bounded, redacted and labelled untrusted.
+Image observations use configured models and count against the task call budget.
+The resulting context is retained with the task so execution uses the same evidence.
+Uploads never enter repository paths, command arguments or the Docker sandbox and
+cannot bypass deterministic patch, test or approval checks. Removed composer files
+are not sent with the task; their temporary server copies expire automatically.

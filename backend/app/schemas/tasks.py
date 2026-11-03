@@ -23,6 +23,8 @@ class CreateTaskRequest(RequestModel):
     issue_number: int | None = Field(default=None, gt=0)
     prompt: str | None = Field(default=None, min_length=1, max_length=20_000)
 
+    attachment_ids: list[str] = Field(default_factory=list, max_length=4)
+
     @model_validator(mode="after")
     def validate_source(self):
         if self.prompt is not None:

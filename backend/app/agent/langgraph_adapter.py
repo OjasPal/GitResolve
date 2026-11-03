@@ -64,7 +64,10 @@ class LangGraphAgentRunner:
         from app.schemas.enums import EventType, TaskStage
         ctx.stage(TaskStage.PLAN)
         ctx.event(EventType.INFO, "Planning started. Acquiring repository context before calling the model.")
-        ctx.usage(modelCalls=1)
+        from app.agent.attachment_context import attachment_context
+        state["issue_body"] += attachment_context(task, ctx)
+        current = ctx._svc.store.get(f"tasks/{task.task_id}")["budgets"]
+        ctx.usage(modelCalls=current["modelCalls"] + 1)
         with ctx.repository() as repo_path:
             state["repo_path"] = str(repo_path) if repo_path else None
             if repo_path:

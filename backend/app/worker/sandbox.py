@@ -82,8 +82,12 @@ def execute(ctx, *, commit_sha: str, command: list[str], patch: str = ""):
     ctx.usage(execSeconds=task["budgets"]["execSeconds"] + result.duration_ms / 1000)
     import re
     from app.services.ids import sha256_hash
+    from app.services.publication_patch import publication_patch
+    strip_tests = getattr(ctx, "sandbox_only_tests", False)
+    published_patch = publication_patch(patch) if strip_tests else patch
     ctx._svc.record_sandbox(ctx.task_id, ctx.worker_id, {
-        "source": "docker", "baseSha": commit_sha, "diffHash": sha256_hash(patch),
+        "source": "docker", "baseSha": commit_sha, "diffHash": sha256_hash(published_patch),
+        **({"verificationPatch": patch} if strip_tests else {}),
         "command": command, "passed": result.status == "passed" and result.exit_code == 0
             and not result.oom_killed and result.cleanup_ok,
         "executionId": result.execution_id,

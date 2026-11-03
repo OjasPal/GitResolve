@@ -8,7 +8,7 @@ from datetime import datetime
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, health, repositories, tasks
+from app.api.routes import auth, health, repositories, tasks, attachments
 from app.core.body_limit import RequestBodyLimitMiddleware
 from app.core.config import Settings, get_settings
 from app.core.errors import install_error_handlers
@@ -52,6 +52,14 @@ def create_app(
     async def lifespan(_: FastAPI):
         stop = threading.Event()
         thread = None
+        from app.services.attachments import AttachmentStore
+        uploads = AttachmentStore(settings, store)
+        def clean_uploads():
+            while not stop.is_set():
+                uploads.cleanup()
+                stop.wait(600)
+        cleanup_thread = threading.Thread(target=clean_uploads, name="upload-cleanup", daemon=True)
+        cleanup_thread.start()
         if (settings.embedded_worker or local_worker) and settings.environment in ("local", "test"):
             from app.worker.runner import build_worker
 
@@ -63,6 +71,7 @@ def create_app(
             yield
         finally:
             stop.set()
+            cleanup_thread.join(timeout=2)
             if thread is not None:
                 thread.join(timeout=2)
 
@@ -109,7 +118,7 @@ def create_app(
 
     install_error_handlers(app)
     app.include_router(health.router)  # /health (liveness, outside the versioned prefix)
-    for router in (auth.router, repositories.router, tasks.router):
+    for router in (auth.router, repositories.router, tasks.router, attachments.router):
         app.include_router(router, prefix=API_PREFIX)
     return app
 

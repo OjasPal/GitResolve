@@ -3,7 +3,7 @@ import re
 from pathlib import PurePosixPath
 
 
-def validate_fix(diff: str, limits: dict, evidence: dict, base_sha: str | None) -> None:
+def validate_fix(diff: str, limits: dict, evidence: dict, base_sha: str | None, *, require_regression: bool = True) -> None:
     if not base_sha or not re.fullmatch(r"[0-9a-f]{40}", base_sha):
         raise ValueError("A pinned base SHA is required.")
     if not (evidence.get("reproduced") is True and evidence.get("regressionPassed") is True
@@ -43,5 +43,5 @@ def validate_fix(diff: str, limits: dict, evidence: dict, base_sha: str | None) 
             changes += 1
     if not paths or len(set(paths)) != len(paths) or len(paths) > limits["maxDiffFiles"] or changes > limits["maxDiffLines"]:
         raise ValueError(f"Diff exceeds scope or has duplicate file sections: {len(paths)} files, {changes} changed lines; limits {limits['maxDiffFiles']} files and {limits['maxDiffLines']} lines.")
-    if not any(PurePosixPath(p).name.startswith("test_") and p.endswith(".py") for p in paths):
+    if require_regression and not any(PurePosixPath(p).name.startswith("test_") and p.endswith(".py") for p in paths):
         raise ValueError("A regression test must be included in the diff.")

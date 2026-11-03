@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     github_app_callback_url: str = "http://localhost:8000/api/v1/auth/github/callback"
     frontend_base_url: str = "http://localhost:3000"
 
+    # Uploads are private context, never public static files. API and worker share this local volume.
+    attachment_storage_path: Path = Path(__file__).resolve().parents[3] / ".diagnostics" / "uploads"
+    attachment_scanner_host: str = "127.0.0.1"
+    attachment_scanner_port: int = 3310
+
     # --- Auth ---------------------------------------------------------------
     session_jwt_secret: str = Field(default="dev-only-insecure-secret-change-me-32b", repr=False)
     jwt_algorithm: str = "HS256"

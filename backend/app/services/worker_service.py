@@ -298,7 +298,8 @@ class WorkerService:
             tests_doc = self._artifact_doc(ctx.task, "final_tests", ArtifactType.FINAL_TESTS, final_tests, None, now)
             from app.services.policy import validate_fix
             try:
-                validate_fix(final_diff, ctx.task["limits"], verification or {}, ctx.task.get("baseSha"))
+                from app.services.publication_patch import validate_publication
+                validate_publication(final_diff, ctx.task["limits"], verification or {}, ctx.task.get("baseSha"), ctx.task.get("sandboxVerification") or {})
             except ValueError as exc:
                 raise ExecutionLimit(FailureCode.POLICY_VIOLATION) from exc
             if diff_doc["truncated"]:

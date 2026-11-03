@@ -175,7 +175,13 @@ class AnthropicVertexProvider(BaseProvider):
         try:
             client = self._get_client()
 
-            messages = [{"role": "user", "content": prompt}]
+            content = prompt
+            if isinstance(prompt, ImageContextPrompt):
+                import base64
+                content = [{"type": "text", "text": str(prompt)}] + [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64.b64encode(image).decode()}}
+                    for image in prompt.images]
+            messages = [{"role": "user", "content": content}]
             kwargs: dict[str, Any] = {
                 "model": model_id,
                 "max_tokens": self.settings.max_output_tokens,
@@ -237,6 +243,14 @@ class AnthropicVertexProvider(BaseProvider):
             raise classify_error(exc, provider="anthropic", model_id=model_id) from exc
 
 
+class ImageContextPrompt(str):
+    """Text plus already validated image bytes; no paths or URLs from uploads."""
+    def __new__(cls, text: str, images: list[bytes]):
+        obj = super().__new__(cls, text)
+        obj.images = images
+        return obj
+
+
 class GoogleGenAIProvider(BaseProvider):
     def __init__(self, settings: RouterSettings | None = None):
         self.settings = settings or get_router_settings()
@@ -286,7 +300,8 @@ class GoogleGenAIProvider(BaseProvider):
 
             response = client.models.generate_content(
                 model=model_id,
-                contents=prompt,
+                contents=([types.Part.from_text(text=str(prompt))] + [types.Part.from_bytes(data=image, mime_type="image/png") for image in prompt.images]
+                          if isinstance(prompt, ImageContextPrompt) else prompt),
                 config=config,
             )
 

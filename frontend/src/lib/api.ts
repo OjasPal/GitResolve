@@ -133,7 +133,8 @@ export async function listIssues(repoId: string): Promise<IssueListResponse> {
 export async function createTask(
   repoId: string,
   source: number | string,
-  idempotencyKey?: string
+  idempotencyKey?: string,
+  attachmentIds: string[] = []
 ): Promise<TaskResponse> {
   const headers: Record<string, string> = {};
   if (idempotencyKey) {
@@ -143,7 +144,7 @@ export async function createTask(
   return request<TaskResponse>("/tasks", {
     method: "POST",
     headers,
-    body: JSON.stringify(typeof source === "string" ? { repoId, prompt: source } : { repoId, issueNumber: source }),
+    body: JSON.stringify(typeof source === "string" ? { repoId, prompt: source, attachmentIds } : { repoId, issueNumber: source, attachmentIds }),
   });
 }
 

@@ -14,13 +14,14 @@ class RequestBodyLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
+        limit = 5 * 1024 * 1024 if scope.get("path") == "/api/v1/attachments" and scope.get("method") == "POST" else self.max_body_bytes
         content_length = next(
             (value for key, value in scope.get("headers", []) if key.lower() == b"content-length"),
             None,
         )
         if content_length is not None:
             try:
-                if int(content_length) > self.max_body_bytes:
+                if int(content_length) > limit:
                     await self._too_large(scope, receive, send)
                     return
             except ValueError:
@@ -37,7 +38,7 @@ class RequestBodyLimitMiddleware:
 
             chunk = message.get("body", b"")
             size += len(chunk)
-            if size > self.max_body_bytes:
+            if size > limit:
                 await self._too_large(scope, receive, send)
                 return
             body.extend(chunk)
