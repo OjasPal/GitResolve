@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     github_app_client_secret: str | None = Field(default=None, repr=False)
     github_app_private_key: str | None = Field(default=None, repr=False)
     github_app_callback_url: str = "http://localhost:8000/api/v1/auth/github/callback"
+    github_app_local_callback_url: str | None = None
     frontend_base_url: str = "http://localhost:3000"
 
     # Uploads are private context, never public static files. API and worker share this local volume.

@@ -1,5 +1,6 @@
 import hmac
 import secrets
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import RedirectResponse
@@ -14,6 +15,15 @@ from app.services.task_service import TaskService
 
 router = APIRouter(tags=["auth"])
 OAUTH_STATE_COOKIE = "gitresolve_oauth_state"
+
+
+def _github_callback_url(request: Request, settings: Settings) -> str:
+    local_url = settings.github_app_local_callback_url
+    if settings.environment == "local" and local_url:
+        local = urlsplit(local_url)
+        if local.hostname in {"localhost", "127.0.0.1", "::1"} and request.url.netloc == local.netloc:
+            return local_url
+    return settings.github_app_callback_url
 
 
 def _oauth_redirect(
@@ -41,12 +51,14 @@ def _configured_github_oauth(request: Request) -> GitHubOAuthProvider:
 
 @router.get("/auth/github/login", include_in_schema=True)
 def github_login(
+    request: Request,
     settings: Settings = Depends(get_app_settings),
     github: GitHubOAuthProvider = Depends(_configured_github_oauth),
 ) -> RedirectResponse:
     state = secrets.token_urlsafe(32)
+    callback_url = _github_callback_url(request, settings)
     redirect = RedirectResponse(
-        github.authorization_url(state, settings.github_app_callback_url),
+        github.authorization_url(state, callback_url),
         status_code=302,
     )
     redirect.set_cookie(
@@ -54,7 +66,7 @@ def github_login(
         state,
         max_age=600,
         httponly=True,
-        secure=settings.environment == "production",
+        secure=settings.environment == "production" or callback_url.startswith("https://"),
         samesite="lax",
         path="/api/v1/auth/github/callback",
     )
@@ -76,7 +88,7 @@ def github_callback(
         return _oauth_redirect(settings, clear_state=True)
 
     try:
-        identity = github.authenticate(code, settings.github_app_callback_url)
+        identity = github.authenticate(code, _github_callback_url(request, settings))
     except GitHubUnavailable:
         return _oauth_redirect(settings, clear_state=True)
 

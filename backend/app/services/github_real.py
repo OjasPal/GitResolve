@@ -31,16 +31,36 @@ class RealGitHubGateway:
 
     def _repositories(self, user_id):
         user = self.store.get(f"users/{user_id}") or {}
-        for installation in user.get("installationIds", []):
+        if not user.get("githubLogin"):
+            return
+        # Discover installations across owners, then authorize every repository
+        # against the signed-in GitHub identity before exposing it.
+        installations = self.auth.app_client().pages("/app/installations")
+        for installed in installations:
+            if installed.get("suspended_at"):
+                continue
+            installation = installed["id"]
             if self.settings.github_installation_id and installation != self.settings.github_installation_id:
                 continue
-            client = self._client(installation)
-            for repo in client.pages("/installation/repositories", "repositories"):
+            try:
+                client = self._client(installation)
+                repositories = client.pages("/installation/repositories", "repositories")
+            except GitHubClientError as exc:
+                if exc.code == "access_revoked":
+                    continue
+                raise
+            for repo in repositories:
                 # OAuth installation membership alone does not establish repository access.
-                permission = client._get(f"/repos/{repo['full_name']}/collaborators/{quote(user['githubLogin'], safe='')}/permission")
+                try:
+                    permission = client._get(f"/repos/{repo['full_name']}/collaborators/{quote(user['githubLogin'], safe='')}/permission")
+                except GitHubClientError as exc:
+                    if exc.code == "access_revoked":
+                        continue
+                    raise
                 if permission.get("user", {}).get("id") != int(user_id):
                     continue
-                if permission.get("permission") not in {"read", "triage", "write", "maintain", "admin"}:
+                # Public visibility is not permission to request repository changes.
+                if permission.get("permission") not in {"write", "maintain", "admin"}:
                     continue
                 yield RepositoryInfo(f"{installation}_{repo['id']}", installation,
                     repo["full_name"], repo["default_branch"], repo["private"], repo.get("language"))

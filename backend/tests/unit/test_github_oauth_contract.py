@@ -1,5 +1,6 @@
 from urllib.parse import parse_qs, urlparse
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings
@@ -12,6 +13,7 @@ from app.services.store.memory import MemoryStore
 class OAuthProvider:
     def __init__(self):
         self.authenticated_codes = []
+        self.callback_urls = []
 
     def authorization_url(self, state: str, redirect_uri: str) -> str:
         return (
@@ -21,6 +23,7 @@ class OAuthProvider:
 
     def authenticate(self, code: str, redirect_uri: str) -> GitHubIdentity:
         self.authenticated_codes.append(code)
+        self.callback_urls.append(redirect_uri)
         return GitHubIdentity(
             user_id="42",
             login="octocat",
@@ -64,3 +67,23 @@ def test_auth_routes_validate_oauth_state_and_delegate_github_details():
         user = store.get("users/42")
         assert user["githubLogin"] == "octocat"
         assert user["installationIds"] == [1001]
+
+
+@pytest.mark.parametrize("origin", ["http://localhost:8000", "https://shared.example.test"])
+def test_local_and_shared_oauth_keep_callback_on_the_starting_host(origin):
+    path = "/api/v1/auth/github/callback"
+    settings = Settings(
+        environment="local", _env_file=None,
+        github_app_callback_url="https://shared.example.test" + path,
+        github_app_local_callback_url="http://localhost:8000" + path,
+    )
+    provider = OAuthProvider()
+    app = create_app(settings=settings, store=MemoryStore(), github_oauth=provider)
+    with TestClient(app, base_url=origin) as client:
+        login = client.get("/api/v1/auth/github/login", follow_redirects=False)
+        params = parse_qs(urlparse(login.headers["location"]).query)
+        assert params["redirect_uri"] == [origin + path]
+        result = client.get(path, params={"code": "test-code", "state": params["state"][0]},
+                            follow_redirects=False)
+        assert "#accessToken=" in result.headers["location"]
+        assert provider.callback_urls == [origin + path]

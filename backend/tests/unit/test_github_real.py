@@ -162,8 +162,8 @@ def test_gateway_checks_fresh_user_permission_and_scopes_tokens(monkeypatch):
     store = MemoryStore()
     store.set('users/1', {'githubLogin': 'alice', 'installationIds': [10]})
     scopes = []
-    auth = SimpleNamespace(get_installation_token=lambda installation, **kw: scopes.append((installation, kw)) or 'secret')
-    permissions = {'permission': 'read', 'user': {'id': 1}}
+    auth = SimpleNamespace(app_client=lambda: SimpleNamespace(pages=lambda path: [{'id': 10}]), get_installation_token=lambda installation, **kw: scopes.append((installation, kw)) or 'secret')
+    permissions = {'permission': 'write', 'user': {'id': 1}}
     monkeypatch.setattr('app.services.github_real.GitHubClient.pages', lambda *a, **kw:
         [{'id': 20, 'full_name': 'o/r', 'default_branch': 'main', 'private': True}])
     monkeypatch.setattr('app.services.github_real.GitHubClient._get', lambda *a: permissions)
@@ -171,8 +171,33 @@ def test_gateway_checks_fresh_user_permission_and_scopes_tokens(monkeypatch):
     repo, _ = gateway.authorized_client('1', '10_20')
     assert repo.private and scopes[-1][1]['repositories'] == ['r']
     assert scopes[-1][1]['permissions']['contents'] == 'read'
-    permissions['permission'] = 'none'
+    permissions['permission'] = 'read'
     assert gateway.get_repository('1', '10_20') is None
+
+
+def test_gateway_lists_collaborator_repo_alongside_inaccessible_installation_repos(monkeypatch):
+    store = MemoryStore()
+    store.set("users/1", {"githubLogin": "alice", "installationIds": [10]})
+    auth = SimpleNamespace(app_client=lambda: SimpleNamespace(pages=lambda path: [{"id": 10}, {"id": 11}]), get_installation_token=lambda installation, **kwargs: str(installation))
+    gateway = RealGitHubGateway(Settings(_env_file=None), store, auth=auth)
+
+    def pages(client, *args):
+        if client._headers["Authorization"] == "Bearer 10":
+            raise GitHubClientError("access_revoked")
+        return [
+            {"id": 20, "full_name": "org/restricted", "default_branch": "main", "private": True},
+            {"id": 21, "full_name": "org/shared", "default_branch": "main", "private": True},
+        ]
+
+    def permission(client, path):
+        if path.startswith("/repos/org/restricted/"):
+            raise GitHubClientError("access_revoked")
+        assert path == "/repos/org/shared/collaborators/alice/permission"
+        return {"permission": "write", "user": {"id": 1}}
+
+    monkeypatch.setattr("app.services.github_real.GitHubClient.pages", pages)
+    monkeypatch.setattr("app.services.github_real.GitHubClient._get", permission)
+    assert [repo.full_name for repo in gateway.list_repositories("1")] == ["org/shared"]
 
 
 def test_real_mode_refuses_public_development_sign_in(env):

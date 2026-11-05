@@ -84,7 +84,7 @@ export default function RepositoriesPage() {
               <span>Repositories.</span>
             </h1>
             <p className="text-sm text-neutral-500 dark:text-neutral-400 mt-0.5">
-              Repositories authorized through the GitResolve GitHub App installation
+              Missing a shared repository? Ask its owner or organization admin to enable GitResolve Agent on it, then refresh your GitHub authorization.
             </p>
           </div>
 
