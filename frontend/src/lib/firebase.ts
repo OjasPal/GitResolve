@@ -2,6 +2,7 @@ import { initializeApp, getApps, getApp, FirebaseApp } from "firebase/app";
 import {
   getAuth,
   GoogleAuthProvider,
+  GithubAuthProvider,
   Auth,
   browserLocalPersistence,
   setPersistence} from "firebase/auth";
@@ -23,6 +24,7 @@ export const isFirebaseConfigured = Boolean(
 
 let app: FirebaseApp | null = null;
 let auth: Auth | null = null;
+let githubProvider: GithubAuthProvider | null = null;
 let googleProvider: GoogleAuthProvider | null = null;
 
 if (typeof window !== "undefined" && isFirebaseConfigured) {
@@ -33,6 +35,7 @@ if (typeof window !== "undefined" && isFirebaseConfigured) {
     setPersistence(auth, browserLocalPersistence).catch(() => {
       // Persistence setting failure handled gracefully
     });
+    githubProvider = new GithubAuthProvider();
     googleProvider = new GoogleAuthProvider();
     googleProvider.setCustomParameters({ prompt: "select_account" });
   } catch (err) {
@@ -40,4 +43,4 @@ if (typeof window !== "undefined" && isFirebaseConfigured) {
   }
 }
 
-export { app, auth, googleProvider };
+export { app, auth, googleProvider, githubProvider };

@@ -3,7 +3,9 @@ import re
 from githubapp.client import GitHubClientError
 
 
-def apply_diff(diff, read_file):
+def apply_diff(diff, read_file, allowed_deletions=()):
+    if allowed_deletions and (not 1 <= len(allowed_deletions) <= 4 or any(not re.fullmatch(r"test[A-Za-z0-9_]*\.py",n) for n in allowed_deletions)):
+        raise GitHubClientError("unsupported_file")
     lines = diff.splitlines(keepends=True)
     files = []
     i = 0
@@ -13,9 +15,11 @@ def apply_diff(diff, read_file):
             continue
         old = lines[i][4:].rstrip('\r\n')
         i += 1
-        if i >= len(lines) or not lines[i].startswith('+++ b/'):
+        if i >= len(lines) or not lines[i].startswith(('+++ b/','+++ /dev/null')):
             raise GitHubClientError('invalid_diff')
-        name = lines[i][6:].rstrip('\r\n')
+        deleting = lines[i].rstrip('\r\n') == '+++ /dev/null'
+        name = old[2:] if deleting and old.startswith('a/') else lines[i][6:].rstrip('\r\n')
+        if deleting and name not in allowed_deletions: raise GitHubClientError('invalid_diff')
         if not name or any(p in ('', '.', '..') for p in name.split('/')) or '\\' in name:
             raise GitHubClientError('invalid_diff')
         original, mode = ('', '100644') if old == '/dev/null' else read_file(name)
@@ -54,7 +58,11 @@ def apply_diff(diff, read_file):
         content = ''.join(output)
         if len(content.encode()) > 256 * 1024 or mode not in ('100644', '100755'):
             raise GitHubClientError('unsupported_file')
-        files.append({'path': name, 'mode': mode, 'type': 'blob', 'content': content})
+        if deleting:
+            if content or cursor != len(source) or mode != '100644': raise GitHubClientError('invalid_diff')
+            files.append({'path':name,'mode':mode,'type':'blob','sha':None})
+        else:
+            files.append({'path': name, 'mode': mode, 'type': 'blob', 'content': content})
     if not files:
         raise GitHubClientError('invalid_diff')
     return files

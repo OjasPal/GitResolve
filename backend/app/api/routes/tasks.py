@@ -12,6 +12,8 @@ from app.schemas.resources import (
 )
 from app.schemas.tasks import (
     ApproveRequest,
+    StartRequest,
+    GateChatRequest,
     CreateTaskRequest,
     TaskListResponse,
     TaskResponse,
@@ -39,7 +41,7 @@ def create_task(
 
     A repeated `Idempotency-Key` with the same body returns the existing task (200).
     """
-    task, created = service.create_task(user_id, body.repo_id, body.issue_number, idempotency_key, prompt=body.prompt)
+    task, created = service.create_task(user_id, body.repo_id, body.issue_number, idempotency_key, prompt=body.prompt, attachment_ids=body.attachment_ids)
     if not created:
         response.status_code = 200
     return TaskResponse.from_doc(task)
@@ -65,14 +67,20 @@ def get_task(
     return TaskResponse.from_doc(service.get_task(user_id, task_id))
 
 
+@router.post("/{task_id}/conversation", response_model=TaskResponse, responses=ERRORS)
+def gate_conversation(body: GateChatRequest, task_id: str = TASK_ID, user_id: str = Depends(writer_user_id), service: TaskService = Depends(get_task_service)):
+    from app.services.gate_chat import converse
+    return TaskResponse.from_doc(converse(service, user_id, task_id, body))
+
 @router.post("/{task_id}/start", response_model=TaskResponse, responses=ERRORS)
 def start_task(
     task_id: str = TASK_ID,
+    body: StartRequest | None = None,
     user_id: str = Depends(writer_user_id),
     service: TaskService = Depends(get_task_service),
 ) -> TaskResponse:
     """Human gate 1: start repair after reviewing the plan (`awaiting_start` -> `running`)."""
-    return TaskResponse.from_doc(service.start_task(user_id, task_id))
+    return TaskResponse.from_doc(service.start_task(user_id, task_id, body.revision if body else 0))
 
 
 @router.post("/{task_id}/cancel", response_model=TaskResponse, responses=ERRORS)
@@ -96,7 +104,7 @@ def approve_task(
     service: TaskService = Depends(get_task_service),
 ) -> TaskResponse:
     """Human gate 2: approve the exact diff hash. Also retries PR creation after a PR-phase failure."""
-    return TaskResponse.from_doc(service.approve_task(user_id, task_id, body.diff_hash))
+    return TaskResponse.from_doc(service.approve_task(user_id, task_id, body.diff_hash, body.revision))
 
 
 @router.post("/{task_id}/reject", response_model=TaskResponse, responses=ERRORS)

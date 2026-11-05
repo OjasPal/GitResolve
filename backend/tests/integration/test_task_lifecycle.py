@@ -36,7 +36,7 @@ def test_full_lifecycle_without_the_real_agent(env):
     task = r.json()
     task_id = task["id"]
     assert task["status"] == "queued" and task["stage"] == "intake"
-    assert task["attempts"] == {"used": 0, "max": 3}
+    assert task["attempts"] == {"used": 0, "max": env.settings.max_repair_attempts}
     assert task["availableActions"] == ["cancel"]
     assert INTERNAL_KEYS.isdisjoint(task) and "userId" not in task
     assert active_task(env, h) == task_id

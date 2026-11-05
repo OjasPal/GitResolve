@@ -30,7 +30,8 @@ class FakeAgentRunner:
 
     def plan(self, task: AgentTask, ctx: JobContext) -> PlanResult:
         ctx.checkpoint()
-        ctx.usage(modelCalls=1, inputTokens=0, outputTokens=0)
+        current = ctx._svc.store.get(f"tasks/{task.task_id}")["budgets"]
+        ctx.usage(modelCalls=current["modelCalls"] + 1)
         if self.scenario == "plan_failed":
             return PlanResult("failed", failure_code=FailureCode.LLM_UNAVAILABLE, failure_message="Simulated LLM outage.")
         plan = PlanData(
@@ -53,7 +54,8 @@ class FakeAgentRunner:
         ctx.stage(TaskStage.PATCH)
         ctx.event(EventType.ATTEMPT, "Attempt 1 started.", data={"n": 1})
         ctx.stage(TaskStage.TEST)
-        ctx.usage(attempts_used=1, modelCalls=4)
+        current = ctx._svc.store.get(f"tasks/{task.task_id}")["budgets"]
+        ctx.usage(attempts_used=task.attempts_used + 1, modelCalls=current["modelCalls"] + 3)
         if self.scenario == "no_fix":
             return ExecuteResult("failed", failure_code=FailureCode.NO_FIX_FOUND, failure_message="No passing fix within the attempt limit.")
         ctx.stage(TaskStage.EVALUATE)

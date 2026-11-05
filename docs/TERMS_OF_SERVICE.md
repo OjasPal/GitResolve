@@ -35,7 +35,6 @@ The Platform operates through an asynchronous task lifecycle:
 
 ### 2.2. Architectural Reality & Modes of Operation
 Users acknowledge that GitResolve may be deployed in different operating environments:
-- **Production Mode**: Connects to live GitHub App endpoints, Google Cloud Firestore, and Google Cloud Vertex AI (Claude and Gemini models).
 - **Local / Test Fixture Mode**: In local or testing environments (`GITHUB_MODE=fixture`, `AGENT_MODE=fake`), GitHub interactions and agent repair loops operate against deterministic local mock fixtures and an in-memory data store. Features verified in fixture mode do not constitute representations of live cloud behavior.
 
 ---
@@ -82,7 +81,6 @@ You agree that you will not use GitResolve to engage in any prohibited activitie
 
 ## 6. AI-Generated Code Limitations and Inherent Risks
 
-GitResolve utilizes artificial intelligence models provided by third parties (Anthropic Claude and Google Gemini on Google Cloud Vertex AI) to generate software analysis, test suites, and code modifications.
 
 ### 6.1. Probabilistic and Experimental Nature
 **YOU EXPRESSLY ACKNOWLEDGE AND AGREE THAT:**
@@ -160,7 +158,6 @@ We reserve the right to modify these limits or throttle accounts exceeding stand
 
 1. **NO WARRANTIES**: GITRESOLVE, ITS DIRECTORS, EMPLOYEES, AFFILIATES, AGENTS, AND LICENSORS EXPRESSLY DISCLAIM ALL WARRANTIES OF ANY KIND, WHETHER EXPRESS, IMPLIED, STATUTORY, OR OTHERWISE, INCLUDING BUT NOT LIMITED TO THE IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, ACCURACY, NON-INFRINGEMENT, AND QUIET ENJOYMENT.
 2. **NO GUARANTEE OF DEFECT REPAIR**: WE DO NOT WARRANT OR GUARANTEE THAT GITRESOLVE WILL IDENTIFY, REPRODUCE, OR RESOLVE ANY SOFTWARE BUG, DEFECT, OR SECURITY VULNERABILITY IN YOUR REPOSITORY, OR THAT PROPOSED PATCHES WILL BE ERROR-FREE OR PRODUCTION-READY.
-3. **THIRD-PARTY PROVIDERS**: WE MAKE NO WARRANTIES REGARDING THE ACCURACY, UPTIME, AVAILABILITY, OR INTEGRITY OF THIRD-PARTY SERVICES, INCLUDING GITHUB, GOOGLE CLOUD VERTEX AI, ANTHROPIC, OR FIREBASE.
 
 ---
 

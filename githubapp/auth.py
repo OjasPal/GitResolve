@@ -36,3 +36,8 @@ class GitHubAuth:
                                   json=body or None)["token"]
         except (ValueError, KeyError, jwt.PyJWTError):
             raise GitHubClientError("github_auth_error") from None
+
+    def app_client(self):
+        """Client authenticated as the App itself (JWT), for endpoints like GET /app."""
+        from githubapp.client import GitHubClient
+        return GitHubClient(self._generate_jwt())

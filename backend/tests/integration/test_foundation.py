@@ -25,7 +25,7 @@ def test_completion_checks_deadline_inside_transaction(env):
 
 def test_expired_queued_task_never_invokes_agent(env, monkeypatch):
     tid = env.create(env.headers()).json()["id"]
-    env.clock.advance(seconds=1201)
+    env.clock.advance(seconds=env.settings.task_timeout_seconds + 1)
     monkeypatch.setattr(env.agent, "plan", lambda *args: pytest.fail("expired work executed"))
     assert not env.run_worker()
     assert env.store.get(f"tasks/{tid}")["status"] == "timed_out"

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
+import { RepairComposer } from "@/components/RepairComposer";
 import { RepositorySelector } from "@/components/RepositorySelector";
 import { createTask, listIssues, listRepositories } from "@/lib/api";
 import { IssueListItem, RepositoryView } from "@/types";
@@ -28,6 +29,8 @@ export default function NewRepairPage() {
   const submissionKey = useRef<string | null>(null);
   const [issueMode, setIssueMode] = useState<"github" | "manual">("manual");
 
+  const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
+  const [attachmentsBusy, setAttachmentsBusy] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [issueError, setIssueError] = useState<string | null>(null);
 
@@ -101,11 +104,12 @@ export default function NewRepairPage() {
 
   };
 
-  useEffect(() => { submissionKey.current = null; }, [selectedRepoId, selectedIssueNumber, issueMode, prompt]);
+  useEffect(() => { submissionKey.current = null; }, [selectedRepoId, selectedIssueNumber, issueMode, prompt, attachmentIds]);
 
   // Submit task
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (attachmentsBusy && issueMode === "manual") return;
     if (!selectedRepoId) {
       setError("Please select a target repository.");
       return;
@@ -126,7 +130,7 @@ export default function NewRepairPage() {
       setError(null);
       const idempotencyKey = submissionKey.current || crypto.randomUUID();
       submissionKey.current = idempotencyKey;
-      const task = await createTask(selectedRepoId, issueMode === "manual" ? prompt.trim() : selectedIssueNumber!, idempotencyKey);
+      const task = await createTask(selectedRepoId, issueMode === "manual" ? prompt.trim() : selectedIssueNumber!, idempotencyKey, issueMode === "manual" ? attachmentIds : []);
       router.push(`/tasks/${task.id}`);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to create repair task.");
@@ -136,7 +140,7 @@ export default function NewRepairPage() {
 
   return (
     <ProtectedRoute>
-      <div className="max-w-3xl mx-auto space-y-6 py-4">
+      <div className="new-repair-page mx-auto space-y-8 py-4">
         {/* Breadcrumb / Back button */}
         <div className="flex items-center gap-2 text-xs text-neutral-500">
           <Link
@@ -154,10 +158,10 @@ export default function NewRepairPage() {
         <div className="border-b border-neutral-200 dark:border-neutral-800 pb-4">
           <h1 className="text-2xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
             <Wrench className="w-6 h-6 text-neutral-600 dark:text-neutral-400" />
-            <span>Initiate Autonomous Bug Repair</span>
+            <span>New repair.</span>
           </h1>
           <p className="text-sm text-neutral-500 dark:text-neutral-400 mt-1">
-            Specify a bug for the LangGraph agent to analyze, reproduce in a Docker sandbox, and prepare a fix for review.
+            Choose a repository. Bring an issue, or describe the bug in your own words.
           </p>
         </div>
 
@@ -173,7 +177,7 @@ export default function NewRepairPage() {
         )}
 
         {/* Form Card */}
-        <form onSubmit={handleSubmit} className="border border-neutral-200 dark:border-neutral-800 rounded-xl p-6 bg-white dark:bg-neutral-900 shadow-sm space-y-6">
+        <div className="new-repair-layout"><form onSubmit={handleSubmit} className="border border-neutral-200 dark:border-neutral-800 rounded-xl p-6 bg-white dark:bg-neutral-900 shadow-sm space-y-6">
           {/* Field 1: Repository Selector */}
           <RepositorySelector
             repositories={repositories}
@@ -186,9 +190,7 @@ export default function NewRepairPage() {
           {/* Issue Mode Toggle */}
           <div className="space-y-2 pt-2 border-t border-neutral-200 dark:border-neutral-800">
             <div className="flex items-center justify-between">
-              <label className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
-                What needs fixing?
-              </label>
+
               <div className="flex items-center gap-1 p-0.5 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-100 dark:bg-neutral-800 text-xs">
                 <button
                   type="button"
@@ -257,20 +259,8 @@ export default function NewRepairPage() {
             )}
 
             {issueMode === "manual" && (
-              <div className="space-y-2">
-                <label htmlFor="bug-description" className="text-sm font-medium">Describe what you want fixed</label>
-                <textarea
-                  id="bug-description"
-                  required
-                  maxLength={20000}
-                  rows={7}
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  placeholder="What happens, what should happen, and how can we reproduce it? Include error messages or relevant files if you know them."
-                  className="w-full px-3 py-3 text-sm rounded-lg border border-neutral-300 dark:border-neutral-700 bg-transparent focus:outline-none focus:ring-1 focus:ring-neutral-400"
-                />
-                <p className="text-xs text-neutral-500">No GitHub issue needed. Your description stays with this repair task.</p>
-              </div>
+              <RepairComposer value={prompt} onChange={setPrompt} onAttachments={setAttachmentIds} onBusyChange={setAttachmentsBusy} disabled={submitting}/>
+
             )}
           </div>
 
@@ -292,7 +282,7 @@ export default function NewRepairPage() {
             </Link>
             <button
               type="submit"
-              disabled={submitting || loadingRepos || !selectedRepoId || (issueMode === "github" ? loadingIssues || !selectedIssueNumber : !prompt.trim())}
+              disabled={submitting || loadingRepos || !selectedRepoId || (issueMode === "github" ? loadingIssues || !selectedIssueNumber : !prompt.trim() || attachmentsBusy)}
               className="px-6 py-2.5 rounded-lg bg-neutral-900 hover:bg-neutral-800 dark:bg-neutral-100 dark:hover:bg-neutral-200 text-white dark:text-neutral-900 text-sm font-bold transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
             >
               {submitting ? (
@@ -303,12 +293,12 @@ export default function NewRepairPage() {
               ) : (
                 <>
                   <Wrench className="w-4 h-4" />
-                  <span>Start Repair</span>
+                  <span>Analyze</span>
                 </>
               )}
             </button>
           </div>
-        </form>
+        </form><aside className="glass-card repair-limits"><span className="eyebrow">You stay in control</span><h2>Plan first.<br/>Repair second.</h2><p className="neutral-note">Review the investigation plan before the agent starts changing code.</p><div className="border-t border-neutral-800 py-5 mt-6"><p className="text-sm">Standard safety limits</p><ul className="text-sm text-neutral-500 space-y-4 mt-5"><li>6 repair attempts</li><li>30 minute task budget</li><li>5 changed files / 150 lines</li><li>Isolated test execution</li></ul></div><p className="neutral-note">The server enforces the limits shown on your created task. A pull request requires your exact-diff approval.</p></aside></div>
       </div>
     </ProtectedRoute>
   );

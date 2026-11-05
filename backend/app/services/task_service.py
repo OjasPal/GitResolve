@@ -163,11 +163,11 @@ class TaskService:
         return self._github(lambda: self.github.list_open_issues(user_id, repo_id))
 
     # --- Create -------------------------------------------------------------------
-    def _replay(self, existing: Doc, user_id: str, repo_id: str, issue_number: int | None, prompt: str | None = None) -> Doc:
+    def _replay(self, existing: Doc, user_id: str, repo_id: str, issue_number: int | None, prompt: str | None = None, attachment_ids: list[str] | None = None) -> Doc:
         if existing["userId"] != user_id:
             raise not_found()
-        if (existing["repoId"] != repo_id or existing["issue"]["number"] != issue_number
-                or (issue_number is None and existing["issue"].get("body") != prompt)):
+        if (existing.get("attachmentIds", []) != (attachment_ids or []) or existing["repoId"] != repo_id or existing["issue"]["number"] != issue_number
+                or (issue_number is None and existing.get("originalPrompt", existing["issue"].get("body")) != prompt)):
             raise ApiError(
                 409,
                 "idempotency_key_reuse",
@@ -177,7 +177,7 @@ class TaskService:
 
     def create_task(
         self, user_id: str, repo_id: str, issue_number: int | None, idempotency_key: str | None,
-        *, prompt: str | None = None
+        *, prompt: str | None = None, attachment_ids: list[str] | None = None
     ) -> tuple[Doc, bool]:
         """Returns (task, created). `created` is False for an idempotent replay."""
         prompt = prompt.strip() if prompt is not None else None
@@ -187,8 +187,11 @@ class TaskService:
         if idempotency_key:
             existing = self.store.get(task_path(task_id))
             if existing is not None:
-                return self._replay(existing, user_id, repo_id, issue_number, prompt), False
+                return self._replay(existing, user_id, repo_id, issue_number, prompt, attachment_ids), False
 
+        if attachment_ids:
+            from app.services.attachments import AttachmentStore
+            AttachmentStore(self.settings, self.store).read(user_id, attachment_ids)
         now = self.clock()
         midnight = datetime.combine(now.date(), time.min, tzinfo=timezone.utc)
         historical_count = self.store.count_user_tasks_since(user_id, midnight)
@@ -206,7 +209,7 @@ class TaskService:
         if prompt:
             # A direct report is task-local; no GitHub issue is created.
             issue_doc = {
-                "number": None, "title": prompt.splitlines()[0][:200], "url": None,
+                "number": None, "title": "Analyzing your request", "url": None,
                 "body": prompt, "bodyTruncated": False, "labels": [], "comments": [],
             }
         else:
@@ -227,6 +230,7 @@ class TaskService:
             "baseSha": None,
             "issue": issue_doc,
             "idempotencyKey": idempotency_key,
+            "attachmentIds": attachment_ids or [],
             "status": TaskStatus.QUEUED.value,
             "stage": TaskStage.INTAKE.value,
             "statusUpdatedAt": now,
@@ -282,7 +286,7 @@ class TaskService:
         def fn(txn: Txn) -> tuple[Doc, bool]:
             existing = txn.get(task_path(task_id))
             if existing is not None:
-                return self._replay(existing, user_id, repo_id, issue_number, prompt), False
+                return self._replay(existing, user_id, repo_id, issue_number, prompt, attachment_ids), False
             user = txn.get(user_path(user_id))
             holder_id = user.get("activeTaskId") if user else None
             if holder_id:
@@ -322,23 +326,37 @@ class TaskService:
             existing = self.store.get(task_path(task_id))
             if existing is None:
                 raise
-            return self._replay(existing, user_id, repo_id, issue_number, prompt), False
+            return self._replay(existing, user_id, repo_id, issue_number, prompt, attachment_ids), False
         self.store.set(f"repositories/{repo_id}", repo_doc)
         return result
 
     # --- User actions ---------------------------------------------------------------
-    def start_task(self, user_id: str, task_id: str) -> Doc:
+    def start_task(self, user_id: str, task_id: str, revision: int = 0) -> Doc:
         now = self.clock()
 
         def fn(txn: Txn) -> Doc:
             ctx = read_ctx(txn, task_id, owner=user_id, now=now)
+            if ctx.task.get("gateChatBusy") and ctx.task.get("gateChatUntil", now) > now:
+                raise invalid_state("Wait for the review conversation to finish before approving.")
             if ctx.task["status"] != TaskStatus.AWAITING_START:
                 raise invalid_state("Only a task awaiting start can be started.")
+            if revision != ctx.task.get("gateRevision",0):
+                raise invalid_state("The plan changed. Review the updated plan before starting repair.")
+            cleanup_updates = {}
+            if ctx.task.get("cleanupScope"):
+                from sandbox.cleanup import validate_scope
+                scope=ctx.task["cleanupScope"]
+                try:
+                    validate_scope(scope,ctx.task.get("baseSha"),ctx.task["issue"].get("body") or "",approved=False)
+                except ValueError:
+                    raise invalid_state("The cleanup scope changed. Investigate the request again before approving.") from None
+                cleanup_updates={"cleanupScope":{**scope,"approved":True},"limits":{**ctx.task["limits"],"maxDiffLines":scope["maxDiffLines"]}}
             return apply_change(
                 txn, ctx, self.settings, now,
                 to_status=TaskStatus.RUNNING,
                 stage=TaskStage.SETUP,
                 updates={
+                    **cleanup_updates,
                     "dispatchPending": True,
                     "dispatchPhase": DispatchPhase.EXECUTE.value,
                     "dispatchAt": now,
@@ -383,17 +401,21 @@ class TaskService:
 
         return self.store.run_transaction(fn)
 
-    def approve_task(self, user_id: str, task_id: str, diff_hash: str) -> Doc:
+    def approve_task(self, user_id: str, task_id: str, diff_hash: str, revision: int = 0) -> Doc:
         now = self.clock()
 
         def fn(txn: Txn) -> Doc:
             ctx = read_ctx(txn, task_id, owner=user_id, now=now)
+            if ctx.task.get("gateChatBusy") and ctx.task.get("gateChatUntil", now) > now:
+                raise invalid_state("Wait for the review conversation to finish before approving.")
             task = ctx.task
             status = TaskStatus(task["status"])
             phase = (task.get("failure") or {}).get("phase")
             retry = status in PR_RETRY_STATUSES and phase == DispatchPhase.PR.value
             if status != TaskStatus.AWAITING_APPROVAL and not retry:
                 raise invalid_state("This task is not awaiting approval.")
+            if revision != task.get("gateRevision", 0):
+                raise ApiError(409, "stale_review", "The review changed. Review the updated fix before approving.")
             stored = task.get("finalDiffHash")
             if not stored or diff_hash != stored:
                 raise ApiError(

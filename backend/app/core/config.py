@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     github_app_callback_url: str = "http://localhost:8000/api/v1/auth/github/callback"
     frontend_base_url: str = "http://localhost:3000"
 
+    # Uploads are private context, never public static files. API and worker share this local volume.
+    attachment_storage_path: Path = Path(__file__).resolve().parents[3] / ".diagnostics" / "uploads"
+    attachment_scanner_host: str = "127.0.0.1"
+    attachment_scanner_port: int = 3310
+
     # --- Auth ---------------------------------------------------------------
     session_jwt_secret: str = Field(default="dev-only-insecure-secret-change-me-32b", repr=False)
     jwt_algorithm: str = "HS256"
@@ -58,9 +63,9 @@ class Settings(BaseSettings):
 
     # --- Quotas and task limits (TRD sections 4 and 5) ----------------------
     max_tasks_per_day: int = 10
-    max_repair_attempts: int = 3
-    max_model_calls: int = 25
-    task_timeout_seconds: int = 20 * 60
+    max_repair_attempts: int = Field(default=6, ge=1, le=12)
+    max_model_calls: int = 50
+    task_timeout_seconds: int = 30 * 60
     execution_timeout_seconds: int = 300
     max_diff_files: int = 5
     max_diff_lines: int = 150

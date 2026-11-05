@@ -133,7 +133,8 @@ export async function listIssues(repoId: string): Promise<IssueListResponse> {
 export async function createTask(
   repoId: string,
   source: number | string,
-  idempotencyKey?: string
+  idempotencyKey?: string,
+  attachmentIds: string[] = []
 ): Promise<TaskResponse> {
   const headers: Record<string, string> = {};
   if (idempotencyKey) {
@@ -143,7 +144,7 @@ export async function createTask(
   return request<TaskResponse>("/tasks", {
     method: "POST",
     headers,
-    body: JSON.stringify(typeof source === "string" ? { repoId, prompt: source } : { repoId, issueNumber: source }),
+    body: JSON.stringify(typeof source === "string" ? { repoId, prompt: source, attachmentIds } : { repoId, issueNumber: source, attachmentIds }),
   });
 }
 
@@ -160,9 +161,10 @@ export async function getTask(taskId: string): Promise<TaskResponse> {
   return request<TaskResponse>(`/tasks/${taskId}`);
 }
 
-export async function startTask(taskId: string): Promise<TaskResponse> {
+export async function startTask(taskId: string, revision = 0): Promise<TaskResponse> {
   return request<TaskResponse>(`/tasks/${taskId}/start`, {
     method: "POST",
+    body: JSON.stringify({ revision }),
   });
 }
 
@@ -174,11 +176,12 @@ export async function cancelTask(taskId: string): Promise<TaskResponse> {
 
 export async function approveTask(
   taskId: string,
-  diffHash: string
+  diffHash: string,
+  revision = 0
 ): Promise<TaskResponse> {
   return request<TaskResponse>(`/tasks/${taskId}/approve`, {
     method: "POST",
-    body: JSON.stringify({ diffHash }),
+    body: JSON.stringify({ diffHash, revision }),
   });
 }
 
@@ -224,3 +227,5 @@ export async function checkBackendHealth(): Promise<BackendHealth> {
     return { status: "disconnected" };
   }
 }
+
+export function gateConversation(id:string,body:{message:string;operation:"ask"|"revise"|"prompt";revision:number;requestId:string}):Promise<TaskResponse>{return request(`/tasks/${id}/conversation`,{method:"POST",body:JSON.stringify(body)})}

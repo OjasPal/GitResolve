@@ -103,24 +103,23 @@ def test_graph_handles_llm_failure(monkeypatch):
 
 
 def test_graph_records_routing_metadata():
-    anthropic = MockProvider("anthropic")
     google = MockProvider("google")
     settings = RouterSettings(max_provider_retries=1)
 
     router = ModelRouter(
         settings=settings,
-        provider_factory=lambda n: anthropic if n == "anthropic" else google,
+        provider_factory=lambda n: google,
         sleeper=lambda d: None,
     )
     set_global_router(router)
     try:
         result = graph_module.graph.invoke(make_initial_state())
         assert result["status"] == "awaiting_start"
-        assert result["selected_provider"] == "anthropic"
-        assert result["selected_model"] == "claude-sonnet-5-5"
+        assert result["selected_provider"] == "google"
+        assert result["selected_model"] == "gemini-3.8-flash"
         assert result["failover_occurred"] is False
         assert result["specialist_escalation_occurred"] is False
-        assert result["routing_metadata"]["selected_model"] == "claude-sonnet-5-5"
+        assert result["routing_metadata"]["selected_model"] == "gemini-3.8-flash"
         assert result["token_usage"] is not None
         assert result["token_usage"]["input_tokens"] == 200
     finally:
@@ -128,17 +127,16 @@ def test_graph_records_routing_metadata():
 
 
 def test_graph_records_failover_metadata_in_state():
-    anthropic = MockProvider("anthropic")
     google = MockProvider("google")
 
-    # Sonnet fails twice with transient 503
+    # Argon fails twice with transient 503
     for _ in range(2):
-        anthropic.queue("claude-sonnet-5-5", RetryableProviderError("503", "anthropic", "claude-sonnet-5-5", 503))
+        google.queue("gemini-3.8-flash", RetryableProviderError("503", "google", "gemini-3.8-flash", 503))
 
     settings = RouterSettings(max_provider_retries=1)
     router = ModelRouter(
         settings=settings,
-        provider_factory=lambda n: anthropic if n == "anthropic" else google,
+        provider_factory=lambda n: google,
         sleeper=lambda d: None,
     )
     set_global_router(router)
@@ -149,33 +147,16 @@ def test_graph_records_failover_metadata_in_state():
         assert result["selected_model"] == settings.fallback_1.model_id
         assert result["failover_occurred"] is True
         assert result["specialist_escalation_occurred"] is False
-        assert "Failover from anthropic/claude-sonnet-5-5" in result["model_switch_reason"]
+        assert "Technical failover" in result["model_switch_reason"]
     finally:
         set_global_router(None)
 
 
-def test_graph_records_specialist_escalation_when_flagged():
-    anthropic = MockProvider("anthropic")
-    google = MockProvider("google")
-
-    settings = RouterSettings()
-    router = ModelRouter(
-        settings=settings,
-        provider_factory=lambda n: anthropic if n == "anthropic" else google,
-        sleeper=lambda d: None,
-    )
-    set_global_router(router)
-    try:
-        state = make_initial_state()
-        state["is_complex_issue"] = True
-        state["escalation_reason"] = "Deep architectural cross-file bug"
-
-        result = graph_module.graph.invoke(state)
-        assert result["status"] == "awaiting_start"
-        assert result["selected_provider"] == "anthropic"
-        assert result["selected_model"] == "claude-opus-5-5"
-        assert result["specialist_escalation_occurred"] is True
-        assert result["failover_occurred"] is False
-        assert result["escalation_count"] == 1
-    finally:
-        set_global_router(None)
+def test_planning_type_error_does_not_duplicate_a_dispatched_call(monkeypatch):
+    calls=[]
+    def analysis(**kwargs):
+        calls.append(kwargs)
+        raise TypeError("Internal response processing failure")
+    monkeypatch.setattr(graph_module,"analyze_issue_with_gemini",analysis)
+    result=graph_module.graph.invoke(make_initial_state())
+    assert result["status"]=="failed" and len(calls)==1

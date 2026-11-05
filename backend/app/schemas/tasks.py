@@ -1,5 +1,5 @@
-from datetime import datetime
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
@@ -23,6 +23,8 @@ class CreateTaskRequest(RequestModel):
     issue_number: int | None = Field(default=None, gt=0)
     prompt: str | None = Field(default=None, min_length=1, max_length=20_000)
 
+    attachment_ids: list[str] = Field(default_factory=list, max_length=4)
+
     @model_validator(mode="after")
     def validate_source(self):
         if self.prompt is not None:
@@ -32,7 +34,30 @@ class CreateTaskRequest(RequestModel):
         return self
 
 
+class GateChatRequest(RequestModel):
+    message: str = Field(min_length=1, max_length=20000)
+    operation: Literal["ask", "revise", "prompt"] = "ask"
+    revision: int = Field(default=0, ge=0)
+    request_id: str = Field(pattern=r"^[a-zA-Z0-9-]{16,64}$")
+
+    @model_validator(mode="after")
+    def validate_message(self):
+        self.message = self.message.strip()
+        if not self.message or (self.operation != "prompt" and len(self.message) > 4000):
+            raise ValueError("Write a message of up to 4,000 characters, or edit the request using its dedicated editor.")
+        return self
+
+class GateMessage(ResponseModel):
+    role: Literal["user", "assistant"]
+    content: str
+    gate: str
+
+class StartRequest(RequestModel):
+    revision: int = Field(default=0, ge=0)
+
+
 class ApproveRequest(RequestModel):
+    revision: int = Field(default=0, ge=0)
     diff_hash: str = Field(pattern=DIFF_HASH_PATTERN)
 
 
@@ -62,6 +87,7 @@ class IssueSummary(ResponseModel):
 class PlanData(ResponseModel):
     """Plan contract between the agent and the API/UI."""
 
+    title: str = Field(default="", max_length=100)
     problem_summary: str
     steps: list[str] = Field(min_length=1, max_length=10)
     likely_files: list[str] = Field(default_factory=list, max_length=20)
@@ -112,6 +138,9 @@ class PullRequestView(ResponseModel):
 
 # --- Responses ---------------------------------------------------------------
 class TaskResponse(ResponseModel):
+    gate_messages: list[GateMessage] = Field(default_factory=list)
+    gate_revision: int = 0
+    gate_chat_busy: bool = False
     id: str
     status: TaskStatus
     stage: TaskStage
@@ -147,6 +176,7 @@ class TaskResponse(ResponseModel):
 
         failure = doc.get("failure") or {}
         data = dict(doc)
+        data["gateChatBusy"] = bool(doc.get("gateChatBusy") and doc.get("gateChatUntil", datetime.min.replace(tzinfo=timezone.utc)) > datetime.now(timezone.utc))
         data["availableActions"] = available_actions(doc["status"], failure.get("phase"))
         return cls.model_validate(data)
 

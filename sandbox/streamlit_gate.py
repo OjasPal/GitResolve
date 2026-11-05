@@ -3,6 +3,51 @@ from html.parser import HTMLParser
 from pathlib import Path
 import os
 import re
+import ast
+
+
+def missing_local_imports(entrypoint, root):
+    """Check real source exports even when generated tests replace modules with mocks.
+
+    This inspects source only; it never imports or executes repository code.
+    Dynamic export modules are left to the framework execution checks.
+    """
+    errors = []
+    pending = [Path(entrypoint)]
+    seen = set()
+    root = Path(root).resolve()
+    while pending:
+        source = pending.pop().resolve()
+        if source in seen or not source.is_relative_to(root):
+            continue
+        seen.add(source)
+        tree = ast.parse(source.read_text(encoding="utf-8-sig"), filename=str(source))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or not node.module:
+                continue
+            base = source.parent if node.level else root
+            for _ in range(max(0, node.level - 1)):
+                base = base.parent
+            module = base.joinpath(*node.module.split("."))
+            target = module.with_suffix(".py")
+            if not target.is_file():
+                target = module / "__init__.py"
+            if not target.is_file() or not target.resolve().is_relative_to(root):
+                continue  # external dependency, checked during actual execution
+            pending.append(target)
+            definitions = ast.parse(target.read_text(encoding="utf-8-sig"))
+            names = {n.id for n in ast.walk(definitions) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+            names.update(n.name for n in ast.walk(definitions) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)))
+            for definition in ast.walk(definitions):
+                if isinstance(definition, (ast.Import, ast.ImportFrom)):
+                    names.update(a.asname or a.name.split(".")[0] for a in definition.names)
+            if "__getattr__" in names or any(isinstance(n, ast.ImportFrom) and any(a.name == "*" for a in n.names) for n in ast.walk(definitions)):
+                continue
+            for alias in node.names:
+                if alias.name == "*" or alias.name in names or (module / (alias.name + ".py")).is_file() or (module / alias.name / "__init__.py").is_file():
+                    continue
+                errors.append(f"{source.relative_to(root)} imports missing local export {node.module}.{alias.name}. Verify the real source, not a mocked replacement.")
+    return errors
 
 REPORT_PROBE = "Report formatting regression sample"
 REPORT_SAMPLE = f"## Evaluation report\n\n**{REPORT_PROBE}**\n\n- First finding\n- Second finding\n\nA readable assessment paragraph."
@@ -73,12 +118,22 @@ class VisibleText(HTMLParser):
             self.text.append(text)
 
 
+def with_sandbox_timeout(run):
+    """Allow cold container startup while respecting explicit test deadlines."""
+    def run_with_timeout(app, widget_state=None, timeout=None):
+        if timeout is None:
+            timeout = max(app.default_timeout, 15)
+        return run(app, widget_state, timeout=timeout)
+
+    return run_with_timeout
+
+
 def pytest_configure(config):
     from streamlit.testing.v1 import AppTest
     expected = (Path("/workspace") / os.environ["GITRESOLVE_STREAMLIT_ENTRY"]).resolve()
     evidence = {"runs": 0, "widgets": {}, "errors": [], "report_seen": False, "answer_states": set()}
     config._gitresolve_ui = evidence
-    original = AppTest._run
+    original = with_sandbox_timeout(AppTest._run)
 
     def checked_run(self, *args, **kwargs):
         result = original(self, *args, **kwargs)
@@ -139,6 +194,10 @@ def pytest_sessionfinish(session, exitstatus):
         return
     evidence = session.config._gitresolve_ui
     errors = list(evidence["errors"])
+    try:
+        errors.extend(missing_local_imports(Path("/workspace") / os.environ["GITRESOLVE_STREAMLIT_ENTRY"], Path("/workspace")))
+    except (SyntaxError, UnicodeError, OSError) as exc:
+        errors.append(f"Real application source could not be verified: {type(exc).__name__}.")
     if not evidence["runs"]:
         errors.append("No AppTest.from_file execution of the actual Streamlit entry point. Helper/AST/string tests are insufficient.")
     if os.environ.get("GITRESOLVE_REQUIRE_UI_INTERACTION") == "1" and not any(values == {False, True} for values in evidence["widgets"].values()):

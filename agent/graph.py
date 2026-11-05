@@ -29,16 +29,6 @@ def create_plan(state: AgentState) -> dict:
     """Generate an issue-specific investigation plan using the routing architecture."""
 
     try:
-        is_escalated = bool(
-            state.get("is_complex_issue", False)
-            or state.get("specialist_escalation_requested", False)
-        )
-        escalation_reason = (
-            state.get("escalation_reason")
-            or "Complex cross-file or high-difficulty issue flagged by workflow"
-        )
-        escalation_count = state.get("escalation_count", 0)
-
         # Call analyze_issue_with_gemini (which may be monkeypatched by tests or invoke the central router)
         kwargs: dict[str, Any] = {
             "repo_full_name": state["repo_full_name"],
@@ -46,18 +36,13 @@ def create_plan(state: AgentState) -> dict:
             "issue_title": state["issue_title"],
             "issue_body": state["issue_body"],
         }
-        # Pass optional escalation parameters if accepted by the function
-        try:
-            analysis = analyze_issue_with_gemini(
-                task_id=state.get("task_id"),
-                escalate=is_escalated,
-                escalation_reason=escalation_reason,
-                escalation_count=escalation_count,
-                **kwargs,
-            )
-        except TypeError:
-            # Caller monkeypatched with original 4-arg signature
-            analysis = analyze_issue_with_gemini(**kwargs)
+        # Inspect compatibility before dispatch; never retry a call because its
+        # implementation raised TypeError after a request was already sent.
+        import inspect
+        params = inspect.signature(analyze_issue_with_gemini).parameters
+        if "task_id" in params or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+            kwargs["task_id"] = state.get("task_id")
+        analysis = analyze_issue_with_gemini(**kwargs)
 
         router_result = getattr(analysis, "_router_result", None)
         router_meta = router_result.to_metadata() if router_result else {}
@@ -74,6 +59,7 @@ def create_plan(state: AgentState) -> dict:
 
     response_state: dict[str, Any] = {
         "problem_summary": analysis.problem_summary,
+        "task_title": analysis.task_title,
         "plan": analysis.investigation_steps,
         "needs_more_information": analysis.needs_more_information,
         "questions_for_reporter": analysis.questions_for_reporter,
@@ -85,8 +71,6 @@ def create_plan(state: AgentState) -> dict:
     if router_meta:
         response_state.update(router_meta)
         response_state["routing_metadata"] = router_meta
-        if is_escalated:
-            response_state["escalation_count"] = escalation_count + 1
 
     return response_state
 

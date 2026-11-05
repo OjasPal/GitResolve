@@ -19,36 +19,6 @@ class PatchProposal(BaseModel):
     )
 
 
-def should_escalate_to_opus(state: AgentState, settings=None) -> tuple[bool, str]:
-    """Determine if the repair reasoning workflow warrants specialist escalation to Opus.
-    
-    Escalation is a workflow decision, not an exception handler.
-    Conditions:
-    1. Workflow explicitly flagged complex issue / cross-file dependency.
-    2. Bounded repair loop reached configured threshold (e.g. repeated patch/test failures).
-    3. Low structured confidence in previous attempt.
-    """
-    settings = settings or get_router_settings()
-    if not settings.enable_opus_escalation:
-        return False, "Opus escalation disabled"
-
-    current_count = state.get("escalation_count", 0)
-    if current_count >= settings.max_opus_escalations:
-        return False, f"Maximum Opus escalations reached ({current_count}/{settings.max_opus_escalations})"
-
-    if state.get("is_complex_issue", False):
-        return True, "Workflow flagged complex cross-file dependency"
-
-    if state.get("specialist_escalation_requested", False):
-        return True, state.get("escalation_reason") or "Explicit specialist escalation requested by workflow"
-
-    # Repeated repair failures in bounded loop
-    if state.get("repair_attempts", 0) >= 1:
-        return True, f"Repair attempt {state.get('repair_attempts')} failed tests; escalating to specialist reasoning"
-
-    return False, "Standard reasoning sufficient"
-
-
 def execute_repair_step(
     state: AgentState,
     router: ModelRouter | None = None,
@@ -57,8 +27,8 @@ def execute_repair_step(
     """Execute a single bounded repair iteration.
     
     Demonstrates:
-    - Normal Sonnet execution with provider failover for technical outages.
-    - Explicit Opus escalation for complex reasoning / repeated test failures.
+    - Normal Flash execution with technical failover for technical outages.
+    - Bounded repair retries with Gemini models.
     - Test failures or invalid patches DO NOT trigger provider failover.
     - Preserves bounded repair loop.
     """
@@ -67,7 +37,6 @@ def execute_repair_step(
     max_repair_attempts = state.get("max_repair_attempts", 3)
     escalation_count = state.get("escalation_count", 0)
 
-    escalate, reason = should_escalate_to_opus(state)
 
     prompt = f"""
 Repository: {state.get('repo_full_name')}
@@ -79,22 +48,8 @@ Current Repair Attempt: {repair_attempts + 1} of {max_repair_attempts}
 Previous error / test output: {state.get('error')}
 """.strip()
 
-    if escalate:
-        router_result = active_router.escalate_specialist(
-            prompt=prompt,
-            escalation_reason=reason,
-            schema=PatchProposal,
-            task_id=state.get("task_id"),
-            current_escalation_count=escalation_count,
-        )
-        new_escalation_count = escalation_count + 1
-    else:
-        router_result = active_router.route_normal(
-            prompt=prompt,
-            schema=PatchProposal,
-            task_id=state.get("task_id"),
-        )
-        new_escalation_count = escalation_count
+    router_result = active_router.route_normal(prompt=prompt, schema=PatchProposal, task_id=state.get("task_id"))
+    new_escalation_count = escalation_count
 
     proposal: PatchProposal | None = router_result.result.parsed
     if not isinstance(proposal, PatchProposal):

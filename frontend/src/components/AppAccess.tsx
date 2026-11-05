@@ -1,10 +1,11 @@
 "use client";
+import { GithubMark } from "./GithubMark";
 
 import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import { ApiError, connectGitHub, getAuthToken, getMe, listRepositories } from "@/lib/api";
-import { Loader2, FolderGit2 } from "lucide-react";
+import { Loader2,  ShieldCheck, AlertCircle, ArrowUpRight, Check } from "lucide-react";
 
 /** Mount protected screens only once both identity and repository access are ready. */
 export function AppAccess({ children }: { children: React.ReactNode }) {
@@ -22,7 +23,6 @@ export function AppAccess({ children }: { children: React.ReactNode }) {
     setError(null);
     if (!user) return;
     if (!getAuthToken()) {
-      setError("Authorize GitHub to grant access to your installed repositories.");
       return;
     }
     setChecking(true);
@@ -51,17 +51,5 @@ export function AppAccess({ children }: { children: React.ReactNode }) {
   if (loading || !user || checking) return <div className="py-24 flex justify-center gap-2" role="status"><Loader2 className="animate-spin w-5 h-5" />Checking account access...</div>;
   if (ready) return children;
 
-  return <section className="max-w-xl mx-auto my-12 p-8 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 space-y-5">
-    <FolderGit2 className="w-8 h-8" />
-    <h1 className="text-2xl font-semibold">Connect GitHub to continue</h1>
-    <p className="text-sm text-neutral-500">GitHub access is required. Install the GitResolve GitHub App on the repositories you want to repair, then authorize your GitHub account.</p>
-    {error && <p role="alert" className="text-sm text-red-500">{error}</p>}
-    <div className="flex flex-wrap gap-3">
-      {appUrl && <a href={appUrl} target="_blank" rel="noreferrer" className="border rounded-lg px-4 py-2 text-sm">1. Install GitHub App ↗</a>}
-      <button onClick={connectGitHub} className="rounded-lg px-4 py-2 text-sm bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900">{appUrl ? "2. Authorize GitHub" : "Connect GitHub"}</button>
-      <button onClick={() => signOutUser().catch((err) => setError(err instanceof Error ? err.message : "Unable to sign out."))} className="border rounded-lg px-4 py-2 text-sm">Sign out</button>
-      <button onClick={verify} className="border rounded-lg px-4 py-2 text-sm">Check connection</button>
-    </div>
-    {!appUrl && <p className="text-xs text-neutral-500">The GitHub App installation link has not been configured by the administrator. GitHub authorization must also be enabled on the server.</p>}
-  </section>;
+  return <section className="connection-layout"><div className="connection-stepper" aria-label="GitHub connection progress">{["Account","Install app","Choose repositories","Ready"].map((step,i)=><div key={step} className={i<2?"current":""}><b>{i===0?<Check size={14}/>:i+1}</b><span>{step}</span></div>)}</div><div className="connection-card glass-card facet"><GithubMark size={36}/><span className="eyebrow mt-6">Your code. Your boundaries.</span><h1>Choose what GitResolve can see.</h1><p>Connect GitHub to continue. Install the app on the repositories you want to repair, then authorize your account. You approve every change before it leaves.</p><div className="permission-grid"><div><h3>Reads now</h3><ul><li>Repository code</li><li>Issues</li><li>Repository metadata</li></ul></div><div><h3>Writes only after you approve</h3><ul><li>A proposed branch</li><li>A draft pull request</li><li>No automatic merging</li></ul></div></div>{error&&<div className="inline-error" role="alert"><AlertCircle size={18}/><p>{error}</p></div>}<div className="connection-actions">{appUrl&&<a href={appUrl} target="_blank" rel="noreferrer" className="button primary">Install GitHub App<ArrowUpRight size={16}/></a>}<button onClick={connectGitHub} className={appUrl?"button":"button primary"}>Authorize GitHub<ArrowUpRight size={16}/></button></div><p className="neutral-note flex gap-2 items-center"><ShieldCheck size={14}/>Access is scoped to your GitHub App installation.</p>{!appUrl&&<p className="neutral-note">App installation is currently unavailable. Contact the administrator.</p>}<button className="text-sm underline underline-offset-4" onClick={()=>signOutUser().catch(err=>setError(err instanceof Error?err.message:"Unable to sign out."))}>Sign out</button></div></section>;
 }

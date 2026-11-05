@@ -191,12 +191,9 @@ Users may revoke GitResolve's access to their repositories at any time without a
 
 ## 8. Third-Party AI Provider Retention Considerations
 
-GitResolve transmits issue descriptions, error logs, and code patches to artificial intelligence providers hosted on **Google Cloud Vertex AI** (Anthropic Claude and Google Gemini).
 
 ### 8.1. Data Handling by AI Processors
 - **Stateless API Invocations**: Prompts sent to Vertex AI endpoints are processed statelessly in-memory to generate completions (investigation plans, diff patches, PR summaries).
-- **Enterprise Commitments & Policy Qualifications**: In accordance with standard Google Cloud Vertex AI enterprise documentation and Anthropic on Vertex AI terms:
-  - Subject to the customer's enterprise Google Cloud agreement and applicable data processing terms, customer prompts and code submitted via enterprise Vertex AI endpoints are not utilized by default to train, retrain, or improve Google or Anthropic public foundation models.
   - Prompts and generated completions are not logged into public or shared corpora.
   - Data retention on Google Cloud infrastructure is governed by Google Cloud's operational data processing terms and any active abuse-monitoring or security audit logging configurations (typically transient or up to 30 days where operational logging is enabled).
   - Deploying organizations must review their specific Google Cloud Project settings, enterprise agreements, and Model Garden / Vertex AI partner agreements to confirm their organization's data retention and compliance posture.

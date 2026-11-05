@@ -1,7 +1,7 @@
 # Sandbox execution contract
 
 Build: `docker build -t gitresolve-sandbox:poc sandbox`.
-Test: `python -m pytest sandbox -q -ra`.
+Test: `python -m pytest backend/tests/sandbox -q -ra`.
 Docker tests require a Linux Docker engine and the freshly built image.
 Execution never pulls a missing image automatically; build the reviewed image first.
 
@@ -39,6 +39,16 @@ more than 5 files or 150 changed lines, and files over 100 KB. git apply --check
 and application run inside the container before the command. Dependency install
 and network package resolution are not performed; the image includes Python and
 pytest. Projects needing other dependencies need a reviewed image.
+
+The API has one narrow deletion exception: a human-approved cleanup manifest for
+one to four root `test*.py` files at a pinned revision. Only the trusted worker
+supplies `allowed_deletions`; model output and repository contents cannot grant
+this permission. Cleanup allows complete-file removals only, with the exact
+task-scoped line budget approved in the plan (ceiling 400). The image-owned parent
+checks removed paths, local references and unchanged application source, and
+reruns immutable original tests against `/workspace` in a separate pytest child.
+The passing cleanup marker, test evidence and exact diff hash are required for
+publication. Default repair requests still reject deletion.
 
 Docker logs rotate at 1 MiB. Returned stdout+stderr share a bounded capture cap.
 stdout_truncated/stderr_truncated describe capture limits; logs_complete=false

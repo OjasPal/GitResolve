@@ -8,7 +8,6 @@ from githubapp.patch import apply_diff
 from app.schemas.enums import FailureCode
 from app.services.ids import sha256_hash
 from app.services.github import GitHubUnavailable
-from app.services.policy import validate_fix
 from app.worker.pr import PullRequestError, PullRequestResult
 from app.worker.publication_text import publication_subject, reserve_branch
 
@@ -30,11 +29,16 @@ class GitHubPullRequestCreator:
             raise PullRequestError(FailureCode.POLICY_VIOLATION,
                                    'Exact diff approval and passing Docker pytest execution are required.')
         try:
-            validate_fix(diff, task['limits'], task.get('verification') or {}, task['baseSha'])
+            from app.services.publication_patch import validate_publication
+            validate_publication(diff, task['limits'], task.get('verification') or {}, task['baseSha'], receipt, cleanup_scope=task.get('cleanupScope'))
             checkpoint()
             repo, client = self.gateway.authorized_client(task['userId'], task['repoId'], write=True)
             if repo.full_name != task['repoFullName']:
                 raise GitHubClientError('access_revoked')
+            # Verify the GitHub App bot identity before any read or write. This fails
+            # closed: there is deliberately no fallback or hardcoded commit identity.
+            identity = self.gateway.verified_bot_identity(client)
+            commit_date = task['createdAt'].isoformat()
             path = f'/repos/{repo.full_name}'
             subject = publication_subject(task, diff)
             branch = reserve_branch(self.gateway.store, task, subject, digest)
@@ -55,7 +59,9 @@ class GitHubPullRequestCreator:
                     raise GitHubClientError('unsupported_file')
                 blob = client._get(path + '/git/blobs/' + entry['sha'])
                 return base64.b64decode(blob['content'], validate=False).decode('utf-8'), entry['mode']
-            files = apply_diff(diff, read_file)
+            from sandbox.cleanup import validate_scope
+            deletions=validate_scope(task["cleanupScope"],task["baseSha"],task["issue"].get("body") or "") if task.get("cleanupScope") else []
+            files = apply_diff(diff, read_file, deletions)
             previous = None
             for line in diff.splitlines():
                 if line.startswith('--- '):
@@ -67,6 +73,9 @@ class GitHubPullRequestCreator:
             expected = {name: (entry['mode'], entry['sha']) for name, entry in entries.items()
                         if entry['type'] != 'tree'}
             for item in files:
+                if item.get('sha', 'present') is None:
+                    expected.pop(item['path'],None)
+                    continue
                 content = item['content'].encode('utf-8')
                 blob_sha = hashlib.sha1(f'blob {len(content)}\0'.encode() + content).hexdigest()
                 expected[item['path']] = (item['mode'], blob_sha)
@@ -88,10 +97,8 @@ class GitHubPullRequestCreator:
                 'message': subject,
                 'tree': new_tree['sha'], 'parents': [task['baseSha']],
                 # Stable identity/date make retries produce the same commit SHA.
-                'author': {'name': 'gitresolve-agent', 'email': 'gitresolve@users.noreply.github.com',
-                           'date': task['createdAt'].isoformat()},
-                'committer': {'name': 'gitresolve-agent', 'email': 'gitresolve@users.noreply.github.com',
-                              'date': task['createdAt'].isoformat()},
+                'author': identity.git_actor(commit_date),
+                'committer': identity.git_actor(commit_date),
             })
             checkpoint()
             try:

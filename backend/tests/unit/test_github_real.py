@@ -11,6 +11,11 @@ from app.worker.github_pr import GitHubPullRequestCreator
 from app.worker.pr import PullRequestError
 from tests.integration.test_task_lifecycle import drive_to_awaiting_approval
 
+from githubapp.client import GitHubClientError
+from githubapp.identity import BotIdentity
+
+IDENTITY = BotIdentity('gitresolve-agent[bot]', 351129099)
+
 
 class MockAPI:
     def __init__(self):
@@ -45,7 +50,8 @@ def approved(env):
         'command': ['python', '-m', 'pytest'], 'baseSha': task['baseSha'], 'diffHash': task['finalDiffHash']}
     diff = env.store.get(f"tasks/{task['id']}/artifacts/final_diff")['content']
     api = MockAPI()
-    gateway = SimpleNamespace(store=env.store, authorized_client=lambda *a, **kw:
+    gateway = SimpleNamespace(store=env.store, verified_bot_identity=lambda client: IDENTITY,
+                              authorized_client=lambda *a, **kw:
                               (SimpleNamespace(full_name=task['repoFullName']), api))
     return task, diff, api, GitHubPullRequestCreator(gateway)
 
@@ -75,7 +81,13 @@ def test_publication_writes_only_approved_tree_then_draft_pr(env):
     assert 'tsk_' not in writes[1][1]['message'] and len(writes[1][1]['message']) <= 72
     assert result.branch.startswith('gitresolve-agent/') and 'tsk_' not in result.branch
     assert writes[-1][1]['title'] == writes[1][1]['message']
-    assert writes[1][1]['author']['name'] == 'gitresolve-agent'
+    commit = writes[1][1]
+    expected = '351129099+gitresolve-agent[bot]@users.noreply.github.com'
+    for role in ('author', 'committer'):
+        assert commit[role]['name'] == 'GitResolve Agent'
+        assert commit[role]['email'] == expected
+    assert commit['author'] == commit['committer']
+    assert 'gitresolve@users.noreply.github.com' not in str(commit)
     assert events and not any('/merge' in path for _, path, _ in api.calls)
 
 
@@ -113,6 +125,37 @@ def test_publication_uses_reviewed_summary_instead_of_the_user_prompt(env):
     creator.create(task, diff)
     commit = next(kw["json"] for method, path, kw in api.calls if method == "POST" and path.endswith("/git/commits"))
     assert commit["message"] == "fix: Restore readable quiz cards"
+
+
+def test_cleanup_tree_deletes_exact_files_and_reconciles_a_lost_response(env,tmp_path):
+    from sandbox.cleanup import build_scope,deletion_patch
+    from app.services.ids import sha256_hash
+    task,_,api,creator=approved(env)
+    request="Remove all four root test .py files safely"
+    for i in range(4):(tmp_path/f"test_old_{i}.py").write_bytes(b"def test_old(): assert True\n")
+    scope={**build_scope(tmp_path,request,task["baseSha"]),"approved":True}
+    patch=deletion_patch(tmp_path,scope);digest=sha256_hash(patch)
+    task.update(cleanupScope=scope,issue={**task["issue"],"body":request},finalDiffHash=digest,
+        finalDiffSummary={"commitMessage":"chore: Remove unused root test files","branchName":"remove-root-tests"})
+    task["approval"]["diffHash"]=digest
+    task["sandboxVerification"].update(diffHash=digest,cleanupVerified=True,allowedDeletions=[f["path"] for f in scope["files"]])
+    source={'path':'src/slugify.py','mode':'100644','type':'blob','sha':'c'*40}
+    base=[source]+[{'path':f['path'],'mode':'100644','type':'blob','sha':'e'*40} for f in scope['files']]
+    original=api.request
+    def request_api(method,path,**kwargs):
+        if path.endswith('/git/trees/'+'b'*40):return {'tree':base}
+        if path.endswith('/git/blobs/'+'e'*40):return {'content':base64.b64encode(b"def test_old(): assert True\n").decode()}
+        if path.endswith('/git/commits/head'):return {'tree':{'sha':'result'},'parents':[{'sha':task['baseSha']}]}
+        if path.endswith('/git/trees/result'):return {'tree':[source]}
+        return original(method,path,**kwargs)
+    api.request=request_api
+    assert creator.create(task,patch).number==7
+    tree=next(kw['json']['tree'] for method,path,kw in api.calls if method=='POST' and path.endswith('/git/trees'))
+    assert len(tree)==4 and all(entry['sha'] is None and 'content' not in entry for entry in tree)
+    api.calls.clear()
+    api.existing=[{'number':7,'html_url':'https://github.com/demo/seeded-bugs/pull/7','base':{'ref':'main'},'head':{'sha':'head'},'body':f"<!-- gitresolve:{task['id']}:{digest} -->"}]
+    assert creator.create(task,patch).number==7
+    assert all(method=='GET' for method,_,_ in api.calls)
 
 
 def test_gateway_checks_fresh_user_permission_and_scopes_tokens(monkeypatch):
@@ -199,3 +242,32 @@ def test_github_worker_errors_become_safe_task_failures(env, code):
     task = env.get(headers, tid)
     assert task['status'] == 'failed_infra'
     assert task['failure']['code'] == code and task['pr'] is None
+
+def test_publication_refuses_when_bot_identity_unverified(env):
+    task, diff, api, creator = approved(env)
+    def fail(client):
+        raise GitHubClientError('bot_identity_invalid')
+    creator.gateway.verified_bot_identity = fail
+    with pytest.raises(PullRequestError):
+        creator.create(task, diff)
+    assert api.calls == []  # nothing read or written, no fallback identity
+
+
+def test_gateway_verifies_bot_identity_once_via_app_jwt_client():
+    app_client = SimpleNamespace(request=lambda m, p, **kw: {'id': 12345, 'slug': 'gitresolve-agent'})
+    user_client = SimpleNamespace(request=lambda m, p, **kw:
+        {'login': 'gitresolve-agent[bot]', 'id': 351129099, 'type': 'Bot'})
+    calls = []
+    auth = SimpleNamespace(app_id='12345', app_client=lambda: calls.append(1) or app_client)
+    gateway = RealGitHubGateway(Settings(_env_file=None), MemoryStore(), auth=auth)
+    first = gateway.verified_bot_identity(user_client)
+    assert first.email == '351129099+gitresolve-agent[bot]@users.noreply.github.com'
+    assert gateway.verified_bot_identity(user_client) is first and calls == [1]
+
+
+def test_gateway_rejects_wrong_app_id():
+    app_client = SimpleNamespace(request=lambda m, p, **kw: {'id': 999, 'slug': 'gitresolve-agent'})
+    auth = SimpleNamespace(app_id='12345', app_client=lambda: app_client)
+    gateway = RealGitHubGateway(Settings(_env_file=None), MemoryStore(), auth=auth)
+    with pytest.raises(GitHubClientError):
+        gateway.verified_bot_identity(SimpleNamespace())

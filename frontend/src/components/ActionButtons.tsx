@@ -1,5 +1,7 @@
 "use client";
 
+import * as Dialog from "@radix-ui/react-dialog";
+import { toast } from "sonner";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { TaskResponse } from "@/types";
@@ -8,25 +10,32 @@ import { AlertTriangle, GitPullRequest, Loader2, Play, RefreshCw, XCircle } from
 
 interface ActionButtonsProps {
   task: TaskResponse;
+  diffText?: string;
+  planEditing?: boolean;
   reviewedDiffHash: string | null;
   onReviewDiff: () => void;
   onActionSuccess: (updatedTask: TaskResponse) => void;
 }
 
-export function ActionButtons({ task, reviewedDiffHash, onReviewDiff, onActionSuccess }: ActionButtonsProps) {
+export function ActionButtons({ task, diffText, planEditing = false, reviewedDiffHash, onReviewDiff, onActionSuccess }: ActionButtonsProps) {
   const router = useRouter();
+  const [approvalOpen, setApprovalOpen] = useState(false);
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const diffLines = diffText?.split("\n");
+  const added = diffLines?.filter(line => line.startsWith("+") && !line.startsWith("+++")).length;
+  const removed = diffLines?.filter(line => line.startsWith("-") && !line.startsWith("---")).length;
   const actions = task.availableActions || [];
-  const canApprove = Boolean(task.finalDiffHash && reviewedDiffHash === task.finalDiffHash);
+  const canApprove = !planEditing && Boolean(task.finalDiffHash && reviewedDiffHash === task.finalDiffHash);
   const needsDiffReview = (actions.includes("approve") || actions.includes("retry_pr")) && !canApprove;
 
   const handleStart = async () => {
+    if (planEditing) return;
     try {
       setLoadingAction("start");
       setError(null);
-      const updated = await startTask(task.id);
+      const updated = await startTask(task.id, task.gateRevision || 0);
       onActionSuccess(updated);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to start repair");
@@ -43,8 +52,10 @@ export function ActionButtons({ task, reviewedDiffHash, onReviewDiff, onActionSu
     try {
       setLoadingAction("approve");
       setError(null);
-      const updated = await approveTask(task.id, task.finalDiffHash);
+      const updated = await approveTask(task.id, task.finalDiffHash, task.gateRevision || 0);
       onActionSuccess(updated);
+      setApprovalOpen(false);
+      toast.success("Approved. Creating your draft pull request.");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to approve diff");
     } finally {
@@ -85,13 +96,17 @@ export function ActionButtons({ task, reviewedDiffHash, onReviewDiff, onActionSu
   };
 
   const handleRunAgain = () => {
-    router.push("/tasks/new");
+    router.push(`/tasks/new?repo=${encodeURIComponent(task.repoId)}`);
   };
+
+  if (task.status === "completed") {
+    return task.pr?.url ? <a href={task.pr.url} target="_blank" rel="noopener noreferrer" className="button primary"><GitPullRequest className="w-4 h-4"/>View Pull Request</a> : null;
+  }
 
   if (actions.length === 0) {
     if (task.status === "creating_pr") {
       return (
-        <div className="flex items-center gap-2 text-cyan-400 text-sm font-medium">
+        <div className="flex items-center gap-2 text-neutral-400 text-sm font-medium">
           <Loader2 className="w-4 h-4 animate-spin" />
           <span>Opening Pull Request on GitHub...</span>
         </div>
@@ -107,49 +122,51 @@ export function ActionButtons({ task, reviewedDiffHash, onReviewDiff, onActionSu
           <p className="text-neutral-500 dark:text-neutral-400">
             The repair is ready. Open the complete proposed changes to enable approval.
           </p>
-          <button type="button" onClick={onReviewDiff} className="font-medium text-cyan-600 dark:text-cyan-400 underline underline-offset-4 cursor-pointer">
+          <button type="button" onClick={onReviewDiff} className="font-medium text-neutral-600 dark:text-neutral-400 underline underline-offset-4 cursor-pointer">
             Review proposed changes
           </button>
         </div>
       )}
       {error && (
-        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-rose-950/80 border border-rose-800 text-rose-300 text-xs">
+        <div className="button">
           <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
           <span>{error}</span>
         </div>
       )}
 
+      <Dialog.Root open={approvalOpen} onOpenChange={setApprovalOpen}><Dialog.Portal><Dialog.Overlay className="modal-scrim"/><Dialog.Content className="approval-modal" data-lenis-prevent><Dialog.Title>Publish this exact fix?</Dialog.Title><Dialog.Description>Approve the reviewed patch and its recorded evidence. GitResolve will create a branch and a draft pull request. It will never merge it.</Dialog.Description><div className="approval-facts"><div><strong>{task.finalDiffSummary?.filesChanged ?? "—"}</strong>files changed</div><div><strong>+{added ?? task.finalDiffSummary?.linesAdded ?? "—"}</strong>lines added</div><div><strong>−{removed ?? task.finalDiffSummary?.linesRemoved ?? "—"}</strong>lines removed</div></div><p><strong>{task.finalDiffSummary?.commitMessage || "Reviewed repair"}</strong></p><p>Repository: {task.repoFullName}. A unique gitresolve-agent branch is reserved at publication. Test evidence is available in the Tests tab; UI design still needs your visual review.</p><code>{task.finalDiffHash}</code>{error && <p className="inline-error" role="alert">{error}</p>}<div className="actions"><Dialog.Close className="button" disabled={!!loadingAction}>Keep reviewing</Dialog.Close><button className="button primary" onClick={handleApprove} disabled={!!loadingAction || !canApprove}>{loadingAction ? "Creating…" : "Approve & create draft PR"}</button></div></Dialog.Content></Dialog.Portal></Dialog.Root>
       <div className="flex flex-wrap items-center gap-2.5">
         {/* Gate 1: Start Repair Action */}
         {actions.includes("start") && (
           <button
             onClick={handleStart}
-            disabled={!!loadingAction}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-sm transition-all shadow-md shadow-emerald-900/40 disabled:opacity-50 cursor-pointer"
+            disabled={!!loadingAction || planEditing}
+            title={planEditing ? "Finish your conversation or close the request editor before starting repair" : undefined}
+            className="button primary"
           >
             {loadingAction === "start" ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
               <Play className="w-4 h-4 fill-current" />
             )}
-            <span>Start Repair (Gate 1)</span>
+            <span>Start repair</span>
           </button>
         )}
 
         {/* Gate 2: Approve & Create PR Action */}
         {actions.includes("approve") && (
           <button
-            onClick={handleApprove}
+            onClick={() => setApprovalOpen(true)}
             disabled={!!loadingAction || !canApprove}
             title={!canApprove ? "Open the complete current diff before approving" : "Approve these reviewed changes and create a draft PR"}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-sm transition-all shadow-md shadow-emerald-900/40 disabled:opacity-50 cursor-pointer"
+            className="button primary"
           >
             {loadingAction === "approve" ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
               <GitPullRequest className="w-4 h-4" />
             )}
-            <span>Approve & Create PR (Gate 2)</span>
+            <span>Approve & create PR</span>
           </button>
         )}
 
@@ -158,14 +175,14 @@ export function ActionButtons({ task, reviewedDiffHash, onReviewDiff, onActionSu
           <button
             onClick={handleReject}
             disabled={!!loadingAction}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-800 hover:bg-rose-950/60 border border-slate-700 hover:border-rose-800 text-slate-300 hover:text-rose-300 font-medium text-sm transition-all disabled:opacity-50 cursor-pointer"
+            className="button"
           >
             {loadingAction === "reject" ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
               <XCircle className="w-4 h-4" />
             )}
-            <span>Reject Diff</span>
+            <span>Reject changes</span>
           </button>
         )}
 
@@ -174,7 +191,7 @@ export function ActionButtons({ task, reviewedDiffHash, onReviewDiff, onActionSu
           <button
             onClick={handleCancel}
             disabled={!!loadingAction || task.cancelRequested}
-            className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-amber-300 font-medium text-sm transition-all disabled:opacity-50 cursor-pointer"
+            className="button"
           >
             {loadingAction === "cancel" ? (
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -188,9 +205,9 @@ export function ActionButtons({ task, reviewedDiffHash, onReviewDiff, onActionSu
         {/* Retry PR Action */}
         {actions.includes("retry_pr") && (
           <button
-            onClick={handleApprove}
+            onClick={() => setApprovalOpen(true)}
             disabled={!!loadingAction || !canApprove}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-medium text-sm transition-all disabled:opacity-50 cursor-pointer"
+            className="button primary"
           >
             {loadingAction === "approve" ? (
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -202,13 +219,13 @@ export function ActionButtons({ task, reviewedDiffHash, onReviewDiff, onActionSu
         )}
 
         {/* Run Again Action */}
-        {actions.includes("run_again") && (
+        {actions.includes("run_again") && (task.status.startsWith("failed_") || task.status === "timed_out" || task.status === "worker_lost") && (
           <button
             onClick={handleRunAgain}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-medium text-sm transition-all cursor-pointer"
+            className="button"
           >
             <RefreshCw className="w-4 h-4" />
-            <span>New Repair Run</span>
+            <span>Run again</span>
           </button>
         )}
       </div>

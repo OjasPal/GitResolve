@@ -10,7 +10,7 @@ import {
   signOut,
   sendPasswordResetEmail,
   updateProfile} from "firebase/auth";
-import { auth, googleProvider, isFirebaseConfigured } from "@/lib/firebase";
+import { auth, googleProvider, githubProvider, isFirebaseConfigured } from "@/lib/firebase";
 import { clearAuthToken } from "@/lib/api";
 
 export interface GitResolveUser {
@@ -27,6 +27,7 @@ interface AuthContextType {
   isConfigured: boolean;
   error: string | null;
   signInWithGoogle: () => Promise<void>;
+  signInWithGitHub: () => Promise<void>;
   signInWithEmail: (email: string, pass: string) => Promise<void>;
   signUpWithEmail: (email: string, pass: string, name?: string) => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
@@ -40,6 +41,7 @@ const AuthContext = createContext<AuthContextType>({
   isConfigured: false,
   error: null,
   signInWithGoogle: async () => {},
+  signInWithGitHub: async () => {},
   signInWithEmail: async () => {},
   signUpWithEmail: async () => {},
   resetPassword: async () => {},
@@ -75,6 +77,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(false);
     });
   }, []);
+
+  const signInWithGitHub = async () => {
+    setError(null);
+    if (!auth || !githubProvider) throw new Error("GitHub sign-in is currently unavailable.");
+    try { await signInWithPopup(auth, githubProvider); }
+    catch (err) {
+      const code = (err as { code?: string }).code;
+      const message = code === "auth/account-exists-with-different-credential"
+        ? "An account already exists with this email. Sign in using your original method, then connect GitHub from your workspace."
+        : code === "auth/popup-closed-by-user" ? "Sign-in was cancelled. Try again when you’re ready."
+        : "GitHub sign-in failed. Please try again or use another sign-in method.";
+      setError(message); throw new Error(message);
+    }
+  };
 
   const signInWithGoogle = async () => {
     setError(null);
@@ -169,6 +185,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isConfigured: isFirebaseConfigured,
         error,
         signInWithGoogle,
+        signInWithGitHub,
         signInWithEmail,
         signUpWithEmail,
         resetPassword,

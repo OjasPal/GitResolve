@@ -115,10 +115,10 @@ build sources so a root-context upload cannot include local keys or environments
 From the repository root with backend dev/agent/Firestore dependencies installed:
 
 ```text
-python -m pytest -c backend/pyproject.toml backend/tests -q -ra
+python -m pytest -c pyproject.toml backend/tests -q -ra
 python -m pytest githubapp -q -ra
-python -m pytest sandbox -q -ra
-python -m pytest agent -q -ra
+python -m pytest backend/tests/sandbox -q -ra
+python -m pytest backend/tests/agent -q -ra
 ```
 
 Set `FIRESTORE_EMULATOR_HOST=127.0.0.1:8787` for database integration tests.

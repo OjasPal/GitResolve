@@ -14,7 +14,7 @@ from app.schemas.enums import TaskStage
 from app.services.github import FakeGitHubGateway
 from app.worker.github_pr import GitHubPullRequestCreator
 from sandbox.acquisition import acquire
-from sandbox.test_runner import needs_docker
+from tests.sandbox.test_runner import needs_docker
 from tests.unit.test_github_real import MockAPI
 
 DIFF = '''--- a/calc.py

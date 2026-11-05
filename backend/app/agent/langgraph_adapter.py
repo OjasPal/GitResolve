@@ -64,17 +64,31 @@ class LangGraphAgentRunner:
         from app.schemas.enums import EventType, TaskStage
         ctx.stage(TaskStage.PLAN)
         ctx.event(EventType.INFO, "Planning started. Acquiring repository context before calling the model.")
-        ctx.usage(modelCalls=1)
+        from app.agent.attachment_context import attachment_context
+        state["issue_body"] += attachment_context(task, ctx)
+        current = ctx._svc.store.get(f"tasks/{task.task_id}")["budgets"]
         with ctx.repository() as repo_path:
             state["repo_path"] = str(repo_path) if repo_path else None
             if repo_path:
+                from app.agent.cleanup_runner import cleanup_plan
+                cleanup = cleanup_plan(task,ctx,repo_path)
+                if cleanup is not None: return cleanup
                 from app.agent.repair_runner import repository_context
                 state["issue_body"] += "\n\nUNTRUSTED REPOSITORY CONTEXT\n" + repository_context(Path(repo_path), 30000)
             ctx.event(EventType.LLM_CALL, "Requesting an investigation plan from the configured model provider.")
-            result = self._graph.invoke(state)
+            from agent.router import get_router, ModelRouter, router_scope
+            base = get_router()
+            def reserve_call(provider, model):
+                ctx.checkpoint()
+                budgets = ctx._svc.store.get(f"tasks/{task.task_id}")["budgets"]
+                ctx.usage(modelCalls=budgets["modelCalls"] + 1)
+                ctx.event(EventType.LLM_CALL, f"Planning with {provider}/{model}.")
+            active = ModelRouter(base.settings, provider_factory=base.get_provider, before_call=reserve_call, health=base.health, on_transition=lambda detail: ctx.event(EventType.INFO, detail["message"]))
+            with router_scope(active):
+                result = self._graph.invoke(state)
             ctx.checkpoint()
             usage = result.get("token_usage") or {}
-            ctx.usage(inputTokens=usage.get("input_tokens") or 0, outputTokens=usage.get("output_tokens") or 0)
+            ctx.usage(inputTokens=current["inputTokens"] + (usage.get("input_tokens") or 0), outputTokens=current["outputTokens"] + (usage.get("output_tokens") or 0))
             ctx.event(EventType.INFO, "Planning model returned a response.")
         if result["status"] == "failed":
             return PlanResult(
@@ -85,6 +99,7 @@ class LangGraphAgentRunner:
         return PlanResult(
             "needs_input" if result.get("needs_more_information") else "ready",
             plan=PlanData(
+                title=result.get("task_title", ""),
                 problem_summary=result["problem_summary"],
                 steps=result["plan"],
                 likely_files=result.get("likely_files", []),

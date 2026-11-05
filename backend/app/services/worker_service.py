@@ -51,7 +51,7 @@ class ExecutionLimit(Exception):
         super().__init__(code.value)
 
 # Structured fields a worker may set through `update_progress`.
-PROGRESS_FIELDS = frozenset({"baseSha", "testCommand", "baseline", "reproduction"})
+PROGRESS_FIELDS = frozenset({"baseSha", "testCommand", "baseline", "reproduction", "cleanupScope"})
 _PHASE_FOR_STATUS = {
     TaskStatus.PLANNING: DispatchPhase.PLAN,
     TaskStatus.RUNNING: DispatchPhase.EXECUTE,
@@ -275,7 +275,7 @@ class WorkerService:
                 txn, ctx, self.settings, now,
                 to_status=TaskStatus.AWAITING_START,
                 stage=TaskStage.PLAN,
-                updates={"plan": plan_doc, "dispatchPhase": None, **release_lease()},
+                updates={"plan": plan_doc, **({"issue": {**ctx.task["issue"], "title": (plan.title or plan.problem_summary).split("\n")[0][:100]}} if ctx.task["issue"].get("number") is None else {}), "dispatchPhase": None, **release_lease()},
                 events=[EventSpec(EventType.INFO, "Plan ready for review.")],
             )
 
@@ -298,7 +298,8 @@ class WorkerService:
             tests_doc = self._artifact_doc(ctx.task, "final_tests", ArtifactType.FINAL_TESTS, final_tests, None, now)
             from app.services.policy import validate_fix
             try:
-                validate_fix(final_diff, ctx.task["limits"], verification or {}, ctx.task.get("baseSha"))
+                from app.services.publication_patch import validate_publication
+                validate_publication(final_diff, ctx.task["limits"], verification or {}, ctx.task.get("baseSha"), ctx.task.get("sandboxVerification") or {}, cleanup_scope=ctx.task.get("cleanupScope"))
             except ValueError as exc:
                 raise ExecutionLimit(FailureCode.POLICY_VIOLATION) from exc
             if diff_doc["truncated"]:

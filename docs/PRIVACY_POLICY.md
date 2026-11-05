@@ -31,7 +31,6 @@ To provide full transparency regarding our technical architecture, GitResolve ex
 | **Backend Session Management** | **Implemented** | Issues signed HS256 JWT session tokens (`jwt_ttl_minutes = 60`) with cryptographically validated claims. |
 | **Firestore Native Storage** | **Implemented** | Server-side persistence of users, tasks, events, and artifacts using Google Cloud Firestore with client access strictly blocked. |
 | **In-Memory / Local Storage** | **Implemented (Dev/Test)** | Single-process memory store for local development and testing (`STORE_BACKEND=memory`). |
-| **AI Model Routing & Failover** | **Implemented** | Vertex AI routing using Claude Sonnet 5.5 (Primary), Gemini 4 / 3.8 Flash (Technical Failover), and Claude Opus (Specialist Escalation). |
 | **Docker Sandbox Execution** | **Implemented** | Bounded container execution with strict network isolation (`--network none`), read-only root filesystems, and dropped capabilities. |
 | **Human Review Gates** | **Implemented** | Mandatory human approval required at Plan Review (Gate 1) and Cryptographic Diff Verification (Gate 2). |
 | **Data Redaction Engine** | **Implemented** | Regex-based sanitization of API keys, access tokens, private keys, and passwords before logging or storing events and artifacts. |
@@ -146,15 +145,11 @@ Membership in a GitHub App installation does not automatically grant a user acce
 
 ---
 
-## 6. Third-Party AI Providers (Google Gemini & Anthropic Claude)
 
 GitResolve integrates large language models (LLMs) to perform issue analysis, test generation, code synthesis, and pull request documentation.
 
 ### 6.1. AI Provider Infrastructure and Hosted Environment
 All artificial intelligence model interactions in GitResolve are routed through **Google Cloud Vertex AI** enterprise infrastructure:
-1. **Primary Reasoning Model**: Anthropic Claude (`claude-sonnet-5-5`), hosted via Google Cloud Vertex AI managed partner endpoints.
-2. **Specialist Escalation Model**: Anthropic Claude (`claude-opus-5-5`), invoked strictly for complex cross-file reasoning or after repeated repair test failures.
-3. **Technical Failover Models**: Google Gemini (`gemini-4-argon` and `gemini-3.8-flash`), invoked via Vertex AI GenAI SDK if the primary provider experiences transient infrastructure outages or rate-limit saturation.
 
 ### 6.2. Data Transmitted to AI Providers
 When a task is processed, the following data is transmitted via encrypted HTTPS to Google Cloud Vertex AI:
@@ -165,7 +160,6 @@ When a task is processed, the following data is transmitted via encrypted HTTPS 
 - Unified diff code proposals generated during repair loops.
 
 ### 6.3. AI Provider Data Governance and Training Disclosures
-- **Model Training Terms**: Subject to the enterprise agreement with Google Cloud and applicable Google Cloud Vertex AI terms (including the Google Cloud Data Processing Addendum and Anthropic on Vertex AI partner terms), customer prompts and generated completions are treated as customer proprietary data and are not used by default to train or fine-tune public foundation models without customer instruction or consent. Deploying organizations must verify their specific Google Cloud organization settings, data governance policies, and contractual commitments.
 - **Stateless Inference & Logging**: Model calls are processed via stateless HTTPS API transactions; providers do not maintain persistent memory of customer code between discrete requests, subject to standard cloud infrastructure operational, security, and abuse-monitoring logging policies maintained by Google Cloud.
 - **Transmission Security**: All model requests and responses are encrypted in transit using Transport Layer Security (TLS 1.2 or TLS 1.3).
 
@@ -186,7 +180,6 @@ GitResolve enforces an automated, multi-pattern redaction engine (`app.core.reda
 - Authorization header tokens (`Authorization: Bearer ...`);
 - GitHub Personal Access Tokens and OAuth credentials (`ghp_*`, `github_pat_*`);
 - Google Cloud API keys (`AIza*`);
-- OpenAI and Anthropic API keys (`sk-*`);
 - JSON Web Tokens (`eyJ*`);
 - Generic passwords, tokens, and secret assignments.
 

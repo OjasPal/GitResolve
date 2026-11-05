@@ -1,5 +1,6 @@
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -13,6 +14,7 @@ import {
 import {
   EventView,
   TaskResponse} from "@/types";
+import { GateConversation } from "@/components/GateConversation";
 import { StatusBadge } from "@/components/StatusBadge";
 import { StageStepper } from "@/components/StageStepper";
 import { ActionButtons } from "@/components/ActionButtons";
@@ -44,6 +46,7 @@ function TaskWorkspaceContent() {
 
   const [workerStatus, setWorkerStatus] = useState<string | null>(null);
   const [task, setTask] = useState<TaskResponse | null>(null);
+  const [planEditing, setPlanEditing] = useState(false);
   const [events, setEvents] = useState<EventView[]>([]);
   const [activeTab, setActiveTab] = useState<"investigation" | "plan" | "diff" | "tests" | "pr" | "events">("investigation");
 
@@ -54,10 +57,10 @@ function TaskWorkspaceContent() {
 
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
-  const isPolling = Boolean(task && ["queued", "planning", "running", "creating_pr"].includes(task.status));
+  const isPolling = Boolean(task && (task.gateChatBusy || ["queued", "planning", "running", "creating_pr"].includes(task.status)));
 
   const nextAfterRef = useRef<number>(0);
-  const pollingRef = useRef<NodeJS.Timeout | null>(null);
+
   const lastLifecycleRef = useRef<{ taskId: string; status: string } | null>(null);
 
   // Load Task & Artifacts
@@ -157,21 +160,13 @@ function TaskWorkspaceContent() {
     return () => clearTimeout(timer);
   }, [fetchTaskDetails, fetchNewEvents]);
 
-  // Wait for each refresh before scheduling another.
-  useEffect(() => {
-    if (!isPolling) return;
-    let cancelled = false;
-    const poll = async () => {
-      await fetchTaskDetails(false);
-      await fetchNewEvents();
-      if (!cancelled) pollingRef.current = setTimeout(poll, 2500);
-    };
-    pollingRef.current = setTimeout(poll, 2500);
-    return () => {
-      cancelled = true;
-      if (pollingRef.current) clearTimeout(pollingRef.current);
-    };
-  }, [fetchTaskDetails, fetchNewEvents, isPolling]);
+  useQuery({
+    queryKey: ["repair-timeline", taskId],
+    queryFn: async () => { await fetchTaskDetails(false); await fetchNewEvents(); return true; },
+    enabled: Boolean(taskId) && isPolling,
+    refetchInterval: 3000,
+    refetchIntervalInBackground: false,
+  });
 
   if (loading && !task) {
     return (
@@ -237,8 +232,8 @@ function TaskWorkspaceContent() {
 
         <div className="flex items-center gap-3 shrink-0">
           {isPolling && (
-            <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-400 font-mono text-[11px]">
-              <span className="w-1.5 h-1.5 rounded-full bg-sky-500 animate-ping" />
+            <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-neutral-500/30 bg-neutral-500/10 text-neutral-600 dark:text-neutral-400 font-mono text-[11px]">
+              <span className="w-1.5 h-1.5 rounded-full bg-neutral-500 animate-ping" />
               <span>{task.status === "queued" ? "Waiting for worker" : task.status === "planning" ? "Agent planning" : task.status === "creating_pr" ? "Creating pull request" : "Agent working"}</span>
             </div>
           )}
@@ -263,27 +258,24 @@ function TaskWorkspaceContent() {
               <span className="font-mono text-xs px-2 py-0.5 rounded border border-neutral-200 dark:border-neutral-800 bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300">
                 {task.repoFullName} {task.issue.number ? `#${task.issue.number}` : "Direct report"}
               </span>
-              <StatusBadge status={task.status} />
+              {task.failure?.code === "llm_unavailable" ? <span className="status-chip" data-tone="warn">{task.stage === "evaluate" ? "Evaluation incomplete" : "Investigation paused"}</span> : <StatusBadge status={task.status} />}
             </div>
             <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100 truncate">
-              {task.issue.title || `Issue #${task.issue.number}`}
+              {task.issue.number ? task.issue.title || `Issue #${task.issue.number}` : task.plan ? (task.plan.title || task.plan.problemSummary || task.issue.title || "Repair request").split(/[.!?\n]/)[0].slice(0, 100) : "Analyzing your request"}
             </h1>
           </div>
 
           {/* Action buttons (Human gates: Start, Approve, Reject, Cancel) */}
-          <div className="shrink-0">
+          <div className="shrink-0 task-actions">
             <ActionButtons
               task={task}
+              planEditing={planEditing || Boolean(task.gateChatBusy)}
+              diffText={loadedDiffHash === task.finalDiffHash ? diffContent : undefined}
               reviewedDiffHash={activeTab === "diff" ? loadedDiffHash : null}
               onReviewDiff={() => setActiveTab("diff")}
               onActionSuccess={(updated) => setTask(updated)}
             />
           </div>
-        </div>
-
-        {/* Stage stepper */}
-        <div className="pt-2 border-t border-neutral-100 dark:border-neutral-800">
-          <StageStepper currentStage={task.stage} status={task.status} />
         </div>
 
         {/* Task Failure banner if applicable */}
@@ -292,9 +284,9 @@ function TaskWorkspaceContent() {
             <XCircle className="w-4 h-4 shrink-0 mt-0.5" />
             <div className="space-y-0.5">
               <p className="font-semibold">
-                Task Terminated: {task.failure.code} {task.failure.phase ? `(${task.failure.phase} phase)` : ""}
+                {task.failure.code === "llm_unavailable" ? (task.stage === "evaluate" ? "Evaluation incomplete" : "Investigation temporarily paused") : task.failure.code === "timeout" ? "This repair needs more time" : task.failure.code === "no_fix_found" ? "This repair needs another look" : task.failure.code === "sandbox_error" ? "The test environment needs attention" : "This repair couldn’t finish"}
               </p>
-              <p className="font-mono text-neutral-700 dark:text-neutral-300">{task.failure.message}</p>
+              <p className="text-sm">{task.failure.code === "llm_unavailable" ? "The model service couldn’t complete this step. Your progress and evidence are saved below. No pull request will be created without the required checks. Please try again once the service is available." : task.failure.code === "timeout" ? "The run reached its time limit. Your progress is saved below; try a smaller change or start another run." : task.failure.code === "no_fix_found" ? "The agent tried several approaches but hasn’t verified a safe fix. Review the evidence below and try a more focused request." : "We couldn’t complete verification. Your repository is unchanged. Review the details or try again."}</p>
             </div>
           </div>
         )}
@@ -328,85 +320,8 @@ function TaskWorkspaceContent() {
         </div>
       </div>
 
-      {/* Tabs navigation */}
-      <div className="border-b border-neutral-200 dark:border-neutral-800 flex items-center gap-1 overflow-x-auto">
-        <button
-          onClick={() => setActiveTab("investigation")}
-          className={`px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors flex items-center gap-2 cursor-pointer whitespace-nowrap ${
-            activeTab === "investigation"
-              ? "border-neutral-900 dark:border-neutral-100 text-neutral-900 dark:text-neutral-100"
-              : "border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-300"
-          }`}
-        >
-          <Cpu className="w-3.5 h-3.5" />
-          <span>Investigation</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab("plan")}
-          className={`px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors flex items-center gap-2 cursor-pointer whitespace-nowrap ${
-            activeTab === "plan"
-              ? "border-neutral-900 dark:border-neutral-100 text-neutral-900 dark:text-neutral-100"
-              : "border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-300"
-          }`}
-        >
-          <ListOrdered className="w-3.5 h-3.5" />
-          <span>Implementation Plan</span>
-          {task.plan && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />}
-        </button>
-
-        <button
-          onClick={() => setActiveTab("diff")}
-          className={`px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors flex items-center gap-2 cursor-pointer whitespace-nowrap ${
-            activeTab === "diff"
-              ? "border-neutral-900 dark:border-neutral-100 text-neutral-900 dark:text-neutral-100"
-              : "border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-300"
-          }`}
-        >
-          <FileDiff className="w-3.5 h-3.5" />
-          <span>Proposed Patch / Diff</span>
-          {task.finalDiffHash && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />}
-        </button>
-
-        <button
-          onClick={() => setActiveTab("tests")}
-          className={`px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors flex items-center gap-2 cursor-pointer whitespace-nowrap ${
-            activeTab === "tests"
-              ? "border-neutral-900 dark:border-neutral-100 text-neutral-900 dark:text-neutral-100"
-              : "border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-300"
-          }`}
-        >
-          <TestTube2 className="w-3.5 h-3.5" />
-          <span>Sandbox & Tests</span>
-          {testContent && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />}
-        </button>
-
-        <button
-          onClick={() => setActiveTab("pr")}
-          className={`px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors flex items-center gap-2 cursor-pointer whitespace-nowrap ${
-            activeTab === "pr"
-              ? "border-neutral-900 dark:border-neutral-100 text-neutral-900 dark:text-neutral-100"
-              : "border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-300"
-          }`}
-        >
-          <GitPullRequest className="w-3.5 h-3.5" />
-          <span>Pull Request</span>
-          {task.pr && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />}
-        </button>
-
-        <button
-          onClick={() => setActiveTab("events")}
-          className={`px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors flex items-center gap-2 cursor-pointer whitespace-nowrap ${
-            activeTab === "events"
-              ? "border-neutral-900 dark:border-neutral-100 text-neutral-900 dark:text-neutral-100"
-              : "border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-300"
-          }`}
-        >
-          <Terminal className="w-3.5 h-3.5" />
-          <span>Live Events ({events.length})</span>
-        </button>
-      </div>
-
+      <GateConversation key={task.id + task.status + (task.gateRevision||0)} task={task} onSave={setTask} onEditingChange={setPlanEditing}/>
+      <div className="task-split"><aside className="task-live-rail glass-card"><span className="eyebrow">Repair progress</span><StageStepper currentStage={task.stage} status={task.status}/><div className="mt-8 border-t border-neutral-800 pt-6"><EventTimeline events={events} isPolling={isPolling}/></div></aside><section className="task-tab-content"><div className="task-tabs" role="tablist" aria-label="Repair evidence">{([{id:"plan",name:"Plan"},{id:"investigation",name:"Evidence"},{id:"diff",name:"Diff"},{id:"tests",name:"Tests"},{id:"pr",name:"Pull request"},{id:"events",name:`Events (${events.length})`}] as const).map(tab=><button key={tab.id} role="tab" aria-selected={activeTab===tab.id} onClick={()=>setActiveTab(tab.id)}>{tab.name}</button>)}</div>
       {/* Tab 1: Investigation */}
       {activeTab === "investigation" && (
         <div className="space-y-5">
@@ -749,6 +664,7 @@ function TaskWorkspaceContent() {
           <EventTimeline events={events} />
         </div>
       )}
+      </section></div>
     </div>
   );
 }

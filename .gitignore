@@ -234,3 +234,6 @@ secrets/
 
 # Local repair diagnostics (source snapshots and artifacts).
 .diagnostics/
+
+.agents/
+backend/uv.lock
