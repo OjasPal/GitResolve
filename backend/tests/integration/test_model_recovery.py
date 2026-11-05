@@ -7,7 +7,7 @@ from app.agent.langgraph_adapter import LangGraphAgentRunner
 from app.schemas.enums import ArtifactType, FailureCode, TaskStage
 
 
-def test_planning_outage_is_saved_without_automatic_redispatch(env,monkeypatch):
+def test_planning_outage_is_retried_with_a_bound(env,monkeypatch):
     calls=[]
     class Provider(BaseProvider):
         def generate(self,model_id,**kwargs):
@@ -19,10 +19,15 @@ def test_planning_outage_is_saved_without_automatic_redispatch(env,monkeypatch):
     h=env.headers();tid=env.create(h).json()["id"]
     env.run_worker()
     task=env.get(h,tid)
-    assert task["status"]=="failed_infra" and task["failure"]["code"]=="llm_unavailable"
+    assert task["status"] == "queued" and task["outcome"]["kind"] == "infra_retry"
     assert task["attempts"]["used"]==0 and task["budgets"]["modelCalls"]==2
+    for _ in range(2):
+        assert env.run_worker()
+    task = env.get(h, tid)
+    assert task["status"] == "failed_infra" and task["failure"]["code"] == "llm_unavailable"
+    assert task["outcome"]["kind"] == "cannot_fix_with_report"
     assert not task["finalDiffHash"] and not task["pr"]
-    assert not env.run_worker() and len(calls)==2
+    assert not env.run_worker() and 2 <= len(calls) <= 6
     assert env.post(h,tid,"approve",{"diffHash":"sha256:"+"a"*64}).status_code==409
 
 

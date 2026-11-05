@@ -10,6 +10,7 @@ def test_local_state_survives_restart_with_datetimes(tmp_path):
     store = MemoryStore(path)
     now = datetime.now(timezone.utc)
     store.run_transaction(lambda tx: tx.create("tasks/test", {"createdAt": now, "status": "awaiting_approval"}))
+    store.close()
     restored = MemoryStore(path)
     assert restored.get("tasks/test") == {"createdAt": now, "status": "awaiting_approval"}
 
@@ -24,6 +25,7 @@ def test_failed_write_does_not_change_memory_or_disk(tmp_path, monkeypatch):
     with pytest.raises(OSError):
         store.run_transaction(lambda tx: tx.update("users/test", {"login": "changed"}))
     assert store.get("users/test")["login"] == "original"
+    store.close()
     assert MemoryStore(path).get("users/test")["login"] == "original"
 
 

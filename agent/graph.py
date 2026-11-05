@@ -48,13 +48,11 @@ def create_plan(state: AgentState) -> dict:
         router_meta = router_result.to_metadata() if router_result else {}
 
     except Exception as exc:
+        from agent.observability import sanitize_error
         return {
             "stage": "plan",
             "status": "failed",
-            "error": (
-                f"Issue analysis failed "
-                f"({type(exc).__name__}): {exc}"
-            ),
+            "error": sanitize_error(exc),
         }
 
     response_state: dict[str, Any] = {

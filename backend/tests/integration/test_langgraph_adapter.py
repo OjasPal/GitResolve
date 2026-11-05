@@ -67,9 +67,14 @@ def test_llm_failure_and_missing_snapshot_are_reported_not_crashed(env, monkeypa
     h = env.headers()
     tid = env.create(h).json()["id"]
     env.run_worker()
+    for _ in range(2):
+        task = env.get(h, tid)
+        assert task["status"] == "queued" and task["outcome"]["kind"] == "infra_retry"
+        env.run_worker()
     task = env.get(h, tid)
     assert task["status"] == "failed_infra" and task["failure"]["code"] == "llm_unavailable"
-    assert "Simulated provider failure" in task["failure"]["message"]
+    assert "Simulated provider failure" not in task["failure"]["message"]
+    assert "Reference:" in task["failure"]["message"]
 
     monkeypatch.setattr(graph_module, "analyze_issue_with_gemini", lambda **kw: IssueAnalysis(
         problem_summary="s", investigation_steps=["x"], needs_more_information=False, questions_for_reporter=[]))

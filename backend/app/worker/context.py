@@ -1,6 +1,7 @@
 """Handle passed to agent code so it can report progress without touching the store."""
 
 from typing import Any
+import logging
 
 from app.services.github import WorkerGitHubGateway
 from app.schemas.enums import ArtifactType, EventLevel, EventType, TaskStage
@@ -10,6 +11,7 @@ from app.services.worker_service import WorkerService, CancelRequested
 
 class JobContext:
     def __init__(self, service: WorkerService, task_id: str, worker_id: str, github: WorkerGitHubGateway | None = None):
+        self.stopped = None
         self.github = github
         self._svc = service
         self.task_id = task_id
@@ -17,6 +19,9 @@ class JobContext:
 
     def checkpoint(self) -> None:
         """Call between graph nodes. Renews the lease; raises on cancel or lost lease."""
+        if self.stopped is not None and self.stopped.is_set():
+            raise LeaseLost(self.task_id)
+        logging.getLogger("gitresolve.worker").debug("checkpoint", extra=self._svc.lease_diagnostics(self.task_id))
         if self._svc.heartbeat(self.task_id, self.worker_id):
             raise CancelRequested(self.task_id)
 

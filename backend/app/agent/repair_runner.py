@@ -199,7 +199,8 @@ def passed(result):
 
 
 def output(result):
-    return (result.stdout + "\n" + result.stderr)[-12000:]
+    from app.core.errors import safe_message
+    return safe_message((result.stdout + "\n" + result.stderr)[-12000:])
 
 
 def run_repair(task, ctx, router=None):
@@ -360,7 +361,7 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
             if getattr(exc,"reason",None)=="quality":
                 return ExecuteResult("failed",failure_code=FailureCode.NO_FIX_FOUND,failure_message="The revised approach still could not be verified. Failure history is saved; refine the request before another run.")
             ctx.event(EventType.ERROR, "Investigation temporarily paused. Model service recovery is needed.")
-            return ExecuteResult("failed", failure_code=FailureCode.LLM_UNAVAILABLE,
+            return ExecuteResult("infra_retry", failure_code=FailureCode.LLM_UNAVAILABLE,
                 failure_message="Investigation temporarily paused. Your progress is saved. Try again once the model service is available.")
         except ValueError as exc:
             feedback = str(exc)
@@ -443,7 +444,7 @@ Return QualityReview."""
             if getattr(exc,"reason",None)=="quality":
                 return ExecuteResult("failed",failure_code=FailureCode.NO_FIX_FOUND,failure_message="Evaluation remained inconclusive after reasoning review. Your evidence is saved; refine the request before continuing.")
             ctx.event(EventType.ERROR, "Evaluation incomplete. Test evidence is saved, and publication remains blocked.")
-            return ExecuteResult("failed", failure_code=FailureCode.LLM_UNAVAILABLE, failure_message="Evaluation incomplete. Tests finished, but the required review could not complete. Your evidence is saved; no pull request will be created.")
+            return ExecuteResult("infra_retry", failure_code=FailureCode.LLM_UNAVAILABLE, failure_message="Evaluation incomplete. Tests finished, but the required review could not complete. Your evidence is saved; no pull request will be created.")
         except ValueError as exc:
             feedback = "Quality review output invalid: " + str(exc)
             remember(attempt,feedback)

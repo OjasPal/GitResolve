@@ -11,6 +11,9 @@ from typing import Any
 from app.core.config import Settings
 from app.core.errors import invalid_state
 from app.core.redaction import redact
+from app.core.errors import safe_message
+from app.services.outcomes import outcome_payload, outcome_for
+import logging
 from app.schemas.enums import (
     ApprovalState,
     ArtifactType,
@@ -90,6 +93,14 @@ class WorkerService:
                 raise ExecutionLimit(FailureCode.TIMEOUT)
         return ctx
 
+    def lease_diagnostics(self, task_id, failure_count=0):
+        try:
+            task = self.store.get(f"tasks/{task_id}") or {}
+        except Exception:
+            task = {}  # logging must never interrupt lease enforcement
+        return {"task_id": task_id, "lease_expiry": str(task.get("leaseExpiresAt")),
+                "last_heartbeat": str(task.get("heartbeatAt")), "failure_count": failure_count}
+
     def _lease_updates(self, now: datetime, worker_id: str) -> dict[str, Any]:
         return {
             "leaseOwner": worker_id,
@@ -128,7 +139,7 @@ class WorkerService:
             # Inconsistent dispatch marker: drop it rather than run the wrong phase.
             apply_change(txn, ctx, self.settings, now, updates={"dispatchPending": False})
             return None
-        updates = {"dispatchPending": False, **self._lease_updates(now, worker_id)}
+        updates = {"dispatchPending": False, "outcome": None, **self._lease_updates(now, worker_id)}
         if phase == DispatchPhase.PLAN:
             updates["startedAt"] = now
             new = apply_change(
@@ -151,7 +162,12 @@ class WorkerService:
             ctx = self._owned(txn, task_id, worker_id, stopping=True)
             if ctx.task.get("deadlineAt") and now >= ctx.task["deadlineAt"]:
                 raise ExecutionLimit(FailureCode.TIMEOUT)
-            txn.update(f"tasks/{task_id}", self._lease_updates(now, worker_id))
+            # Coalesce rapid checkpoints, never extend a lease only in memory.
+            # Every persisted extension is durable before the caller proceeds.
+            last = ctx.task.get("heartbeatAt")
+            elapsed = (now - last).total_seconds() if last else float("inf")
+            if elapsed >= min(self.settings.heartbeat_seconds, self.settings.lease_seconds / 3):
+                txn.update(f"tasks/{task_id}", self._lease_updates(now, worker_id))
             return bool(ctx.task.get("cancelRequested"))
 
         return self.store.run_transaction(fn)
@@ -220,7 +236,7 @@ class WorkerService:
         self, task: Doc, artifact_id: str, type_: ArtifactType, content: str,
         attempt: int | None, now: datetime,
     ) -> Doc:
-        clean = redact(content)
+        clean = redact(content) if type_ in {ArtifactType.FINAL_DIFF, ArtifactType.ATTEMPT_DIFF} else safe_message(content)
         if type_ == ArtifactType.FINAL_DIFF and clean != content:
             raise ValueError("final_diff cannot be stored without changing its validated content.")
         raw = clean.encode()
@@ -355,14 +371,39 @@ class WorkerService:
     def fail(
         self, task_id: str, worker_id: str, code: FailureCode, message: str,
         phase: DispatchPhase, retryable: bool = True, plan: PlanData | None = None,
+        outcome: str | None = None, evidence=(), next_step: str = "",
     ) -> Doc:
         """Stop the task. The backend, not the agent, maps `code` to a status."""
+        message = safe_message(message, 500)
         now = self.clock()
         target = status_for_failure(code)
+        evidence = list(evidence) or [a["id"] for a in self.store.list_artifacts(task_id)]
 
         def fn(txn: Txn) -> Doc:
             ctx = self._owned(txn, task_id, worker_id, stopping=True)
+            kind = outcome or outcome_for(code)
+            if kind == "infra_retry" and code not in {
+                FailureCode.INTERNAL_ERROR, FailureCode.LLM_UNAVAILABLE,
+                FailureCode.SANDBOX_ERROR, FailureCode.GITHUB_RATE_LIMITED,
+                FailureCode.GITHUB_ERROR,
+            }:
+                kind = outcome_for(code)  # model output cannot retry policy/budget/access failures
+            retries = ctx.task.get("infraRetries", 0)
+            if kind == "infra_retry" and phase != DispatchPhase.PR and retries < 2 and not ctx.task.get("cancelRequested") and now < ctx.task["deadlineAt"]:
+                return apply_change(txn, ctx, self.settings, now,
+                    to_status=TaskStatus.QUEUED if phase == DispatchPhase.PLAN else TaskStatus.RUNNING,
+                    updates={"infraRetries": retries + 1, "dispatchPending": True,
+                             "dispatchPhase": phase.value, "failure": None,
+                             "outcome": outcome_payload(kind, code, message, evidence, next_step),
+                             **release_lease()},
+                    events=[EventSpec(EventType.INFO, "Temporary infrastructure failure; retry queued.")])
+            if kind == "infra_retry":
+                kind = "cannot_fix_with_report"
+                next_action = "Automatic retries ended. Review the incident reference and run again when infrastructure is available."
+            else:
+                next_action = next_step
             updates: dict[str, Any] = {
+                "outcome": outcome_payload(kind, code, message, evidence, next_action),
                 "failure": {
                     "code": code.value,
                     "message": redact(message, 500),
@@ -402,6 +443,7 @@ class WorkerService:
         now = self.clock()
         reaped: list[str] = []
         for candidate in self.store.list_expired_leases(now, 50):
+            logging.getLogger("gitresolve.worker").warning("expired lease observed", extra=self.lease_diagnostics(candidate["id"]))
             done = self.store.run_transaction(lambda txn, tid=candidate["id"]: self._reap(txn, tid, now))
             if done:
                 reaped.append(candidate["id"])

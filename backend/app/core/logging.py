@@ -21,7 +21,7 @@ class JsonFormatter(logging.Formatter):
             if key not in _RESERVED and not key.startswith("_"):
                 payload[key] = value if isinstance(value, (int, float, bool, type(None))) else redact(str(value), 500)
         if record.exc_info:
-            payload["exception"] = redact(self.formatException(record.exc_info), 4000)
+            payload["exception"] = redact(self.formatException(record.exc_info), host_paths=False)
         return json.dumps(payload, default=str)
 
 

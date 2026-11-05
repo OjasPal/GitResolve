@@ -12,9 +12,13 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 from app.schemas.enums import FailureCode
 from app.schemas.tasks import PlanData
 
+StructuredOutcome = Literal[
+    "fix_ready", "needs_user_action", "needs_clarification", "cannot_reproduce",
+    "out_of_scope", "cannot_fix_with_report", "infra_retry",
+]
+
 if TYPE_CHECKING:
     from app.worker.context import JobContext
-
 
 @dataclass(frozen=True)
 class AgentTask:
@@ -31,24 +35,35 @@ class AgentTask:
     attempts_used: int = 0
     cleanup_scope: dict[str, Any] | None = None
 
-
 @dataclass
 class PlanResult:
-    outcome: Literal["ready", "needs_input", "failed"]
+    outcome: StructuredOutcome | Literal["ready", "needs_input", "failed"]
     plan: PlanData | None = None  # required for "ready"; questions go here for "needs_input"
     failure_code: FailureCode | None = None
     failure_message: str = ""
+    evidence: list[str] = field(default_factory=list)
+    next_step: str = ""
+
+    def __post_init__(self):
+        from app.core.errors import safe_message
+        self.failure_message = safe_message(self.failure_message, 500)
 
 
 @dataclass
 class ExecuteResult:
-    outcome: Literal["fix_ready", "failed"]
+    outcome: StructuredOutcome | Literal["failed"]
     final_diff: str = ""  # exact unified diff that would be used for the PR
     final_tests: str = ""  # redacted before/after test evidence (bounded)
     summary: dict[str, Any] = field(default_factory=dict)  # filesChanged, linesAdded, linesRemoved, files[]
     failure_code: FailureCode | None = None
     failure_message: str = ""
     verification: dict[str, Any] = field(default_factory=dict)
+    evidence: list[str] = field(default_factory=list)
+    next_step: str = ""
+
+    def __post_init__(self):
+        from app.core.errors import safe_message
+        self.failure_message = safe_message(self.failure_message, 500)
 
 
 class AgentRunner(Protocol):

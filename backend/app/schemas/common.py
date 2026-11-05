@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic.alias_generators import to_camel
 
 
@@ -22,6 +22,17 @@ class ResponseModel(ApiModel):
     model_config = ConfigDict(
         alias_generator=to_camel, populate_by_name=True, extra="ignore"
     )
+
+
+class PublicTaskModel(ResponseModel):
+    """Sanitize task data on read, including legacy stored payloads."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def sanitize_public_payload(cls, value):
+        from app.core.redaction import redact_value
+        return redact_value(value)
+
 
 
 class ErrorBody(ApiModel):

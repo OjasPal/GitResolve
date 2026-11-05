@@ -24,7 +24,7 @@ Follow the PRD, TRD, AFD, and Backend Schema as the project’s source of truth.
 - Design LangGraph workflow and shared agent state.
 - Implement issue analysis, repository investigation, and bug localization.
 - Build patch generation and the bounded repair loop.
-- Integrate Gemini/Groq and evaluate agent performance.
+- Integrate Google GenAI and evaluate agent performance.
 - Debug failed runs and improve agent behavior.
 
 ### Member 2 — Backend & Database

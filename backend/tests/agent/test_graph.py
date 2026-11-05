@@ -99,7 +99,8 @@ def test_graph_handles_llm_failure(monkeypatch):
 
     assert result["status"] == "failed"
     assert result["stage"] == "plan"
-    assert "Simulated provider failure" in result["error"]
+    assert "Simulated provider failure" not in result["error"]
+    assert "Reference:" in result["error"]
 
 
 def test_graph_records_routing_metadata():

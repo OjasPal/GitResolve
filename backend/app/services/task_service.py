@@ -6,6 +6,7 @@ from datetime import datetime, time, timedelta, timezone
 from typing import Any
 
 from app.core.config import Settings
+from app.core.redaction import redact
 from app.core.errors import ApiError, invalid_state, not_found
 from app.schemas.enums import (
     ApprovalState,
@@ -144,6 +145,8 @@ class TaskService:
         art = self.store.get(artifact_path(task_id, artifact_id))
         if art is None or (art.get("expiresAt") is not None and art["expiresAt"] <= self.clock()):
             raise not_found()
+        if artifact_id == "final_diff" and redact(art["content"]) != art["content"]:
+            raise invalid_state("The stored diff contains private data. Generate a new fix before review.")
         return art
 
     # --- Repository access (delegated to GitHub boundary) -----------------------
@@ -416,6 +419,9 @@ class TaskService:
                 raise invalid_state("This task is not awaiting approval.")
             if revision != task.get("gateRevision", 0):
                 raise ApiError(409, "stale_review", "The review changed. Review the updated fix before approving.")
+            artifact = txn.get(artifact_path(task_id, "final_diff"))
+            if artifact and redact(artifact["content"]) != artifact["content"]:
+                raise invalid_state("The stored diff contains private data. Generate a new fix before review.")
             stored = task.get("finalDiffHash")
             if not stored or diff_hash != stored:
                 raise ApiError(

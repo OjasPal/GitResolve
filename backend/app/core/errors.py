@@ -1,5 +1,49 @@
 """Shared error type and the `{"error": {"code", "message"}}` response shape."""
 
+import logging
+import uuid
+import re
+from dataclasses import dataclass
+from app.core.redaction import redact_value
+
+
+@dataclass(frozen=True)
+class PublicError:
+    category: str
+    message: str
+    incident_id: str
+
+
+class PersistenceError(OSError):
+    """A local transaction could not be durably committed."""
+
+
+def public_error(error: Exception) -> PublicError:
+    incident = uuid.uuid4().hex
+    category, message = "internal_error", "An unexpected error interrupted this operation."
+    if isinstance(error, TimeoutError):
+        category, message = "timeout", "The operation took too long."
+    elif isinstance(error, (PermissionError, PersistenceError, OSError)):
+        category, message = "storage_unavailable", "Local storage is temporarily unavailable."
+
+    logging.getLogger("gitresolve.errors").error(
+        "incident=%s category=%s", incident, category,
+        exc_info=(type(error), error, error.__traceback__),
+    )
+    return PublicError(category, f"{message} Reference: {incident}.", incident)
+
+
+def safe_message(value: str, max_chars: int | None = None) -> str:
+    """Scrub text; infrastructure exception renderings become incident references.
+
+    Assertion failures and repository-relative test diagnostics are retained.
+    """
+    from app.core.redaction import redact
+    pattern = r"(?m)^.*(?:(?:PermissionError|FileNotFoundError|ConnectionError|PersistenceError|OSError)\s*:|WinError \d+|Traceback \(most recent call last\)).*$"
+    value = re.sub(pattern, lambda match: public_error(RuntimeError(match.group())).message, value)
+    return redact(value, max_chars)
+
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -38,10 +82,10 @@ def unauthorized(message: str = "Authentication required.") -> ApiError:
 
 
 def _body(code: str, message: str, details: dict | None = None) -> dict:
-    body: dict = {"code": code, "message": message}
+    body: dict = {"code": code, "message": safe_message(message)}
     if details:
         body["details"] = details
-    return {"error": body}
+    return redact_value({"error": body})
 
 
 def install_error_handlers(app: FastAPI) -> None:
@@ -71,5 +115,5 @@ def install_error_handlers(app: FastAPI) -> None:
     async def _unhandled(_: Request, __: Exception) -> JSONResponse:
         # Never leak stack traces or internals to clients.
         return JSONResponse(
-            _body("internal_error", "An unexpected error occurred."), status_code=500
+            _body("internal_error", public_error(__).message), status_code=500
         )

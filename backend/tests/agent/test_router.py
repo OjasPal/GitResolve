@@ -419,4 +419,4 @@ def test_12_usage_and_cost_metadata_recorded_correctly():
     sanitized = sanitize_error(raw_error)
     assert fake_api_key not in sanitized
     assert "ya29" not in sanitized
-    assert "[REDACTED" in sanitized
+    assert "Reference:" in sanitized
