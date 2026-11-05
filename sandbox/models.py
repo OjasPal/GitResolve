@@ -21,6 +21,8 @@ class ExecutionRequest(BaseModel):
     require_ui_interaction: bool = False
     require_ui_report: bool = False
     require_ui_answers: bool = False
+    allowed_deletions: list[str] = Field(default_factory=list, max_length=4)
+    verify_cleanup: bool = False
 
     @field_validator("ui_entrypoint")
     @classmethod
@@ -35,7 +37,15 @@ class ExecutionRequest(BaseModel):
             raise ValueError("Streamlit verification requires an entry point.")
         if self.require_ui_checks and self.profile != "streamlit":
             raise ValueError("UI verification requires the Streamlit profile.")
-        if self.max_diff_lines > 150:
+        if self.allowed_deletions:
+            from sandbox.cleanup import safe_names
+            safe_names(self.allowed_deletions)
+            if self.patch:
+                from sandbox.container_entry import validate_patch
+                validate_patch(self.patch,self.max_diff_lines,self.allowed_deletions)
+        if self.verify_cleanup and not (self.allowed_deletions and self.patch):
+            raise ValueError("Cleanup verification requires approved deletions and a patch.")
+        if self.max_diff_lines > 150 and not self.allowed_deletions:
             import json
             from pathlib import Path
             grants_file = Path(__file__).resolve().parents[1] / ".diagnostics" / "task_scope_grants.json"

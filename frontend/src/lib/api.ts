@@ -161,9 +161,10 @@ export async function getTask(taskId: string): Promise<TaskResponse> {
   return request<TaskResponse>(`/tasks/${taskId}`);
 }
 
-export async function startTask(taskId: string): Promise<TaskResponse> {
+export async function startTask(taskId: string, revision = 0): Promise<TaskResponse> {
   return request<TaskResponse>(`/tasks/${taskId}/start`, {
     method: "POST",
+    body: JSON.stringify({ revision }),
   });
 }
 

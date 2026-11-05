@@ -17,7 +17,15 @@ def publication_patch(patch):
     if not result.strip(): raise ValueError("No implementation changes to publish")
     return result
 
-def validate_publication(diff, limits, evidence, base_sha, receipt):
+def validate_publication(diff, limits, evidence, base_sha, receipt, cleanup_scope=None):
+    if cleanup_scope:
+        from sandbox.cleanup import validate_cleanup_patch, validate_scope
+        names=validate_scope(cleanup_scope,base_sha)
+        validate_cleanup_patch(diff,cleanup_scope)
+        if receipt.get("cleanupVerified") is not True or receipt.get("allowedDeletions") != names:
+            raise ValueError("Cleanup requires trusted deletion and compatibility checks.")
+        validate_fix(diff,limits,evidence,base_sha,require_regression=False,allowed_deletions=names)
+        return
     tested = receipt.get("verificationPatch")
     if tested is not None:
         validate_fix(tested, limits, evidence, base_sha)

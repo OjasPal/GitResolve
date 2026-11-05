@@ -25,11 +25,12 @@ T = TypeVar("T", bound=BaseModel)
 
 
 class AllProvidersFailedError(Exception):
-    """Raised when all configured providers in the failover chain fail with technical errors."""
+    """Stop safely when technical availability or bounded reasoning review is exhausted."""
 
-    def __init__(self, message: str, errors: list[dict[str, Any]]):
+    def __init__(self, message: str, errors: list[dict[str, Any]], reason: str = "technical"):
         super().__init__(message)
         self.errors = errors
+        self.reason = reason
 
 
 @dataclass
@@ -174,7 +175,7 @@ class ModelRouter:
                     self._transition("recovery", "Evaluation incomplete. Your evidence is saved; no pull request will be created.")
                     raise AllProvidersFailedError("Reasoning specialist could not complete; recovery required.", errors)
                 if inadequate(improved):
-                    raise AllProvidersFailedError("Reasoning review remains inconclusive; recovery required.", errors)
+                    raise AllProvidersFailedError("Reasoning review remains inconclusive; recovery required.", errors, reason="quality")
                 if result.usage and improved.usage:
                     improved.usage = replace(improved.usage,
                         input_tokens=(result.usage.input_tokens or 0)+(improved.usage.input_tokens or 0),

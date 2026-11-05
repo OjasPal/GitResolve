@@ -52,6 +52,10 @@ class GateMessage(ResponseModel):
     content: str
     gate: str
 
+class StartRequest(RequestModel):
+    revision: int = Field(default=0, ge=0)
+
+
 class ApproveRequest(RequestModel):
     revision: int = Field(default=0, ge=0)
     diff_hash: str = Field(pattern=DIFF_HASH_PATTERN)

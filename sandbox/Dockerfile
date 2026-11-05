@@ -9,6 +9,9 @@ RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin sandbox \
     && pip install --no-cache-dir pytest
 
 COPY container_entry.py /usr/local/lib/gitresolve_entry.py
+COPY cleanup.py /usr/local/lib/python3.12/site-packages/gitresolve_cleanup.py
+COPY cleanup_verify.py /usr/local/lib/gitresolve_cleanup_verify.py
+COPY cleanup_pytest.py /usr/local/lib/gitresolve_cleanup_pytest.py
 
 WORKDIR /workspace
 USER 10001:10001

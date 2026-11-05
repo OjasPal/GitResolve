@@ -35,7 +35,7 @@ export function ActionButtons({ task, diffText, planEditing = false, reviewedDif
     try {
       setLoadingAction("start");
       setError(null);
-      const updated = await startTask(task.id);
+      const updated = await startTask(task.id, task.gateRevision || 0);
       onActionSuccess(updated);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to start repair");

@@ -29,6 +29,7 @@ class AgentTask:
     plan: dict[str, Any] | None
     limits: dict[str, Any]
     attempts_used: int = 0
+    cleanup_scope: dict[str, Any] | None = None
 
 
 @dataclass

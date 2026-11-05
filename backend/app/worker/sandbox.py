@@ -32,6 +32,12 @@ def execute(ctx, *, commit_sha: str, command: list[str], patch: str = ""):
         sys.path.insert(0, str(root))
     models = importlib.import_module("sandbox.models")
     runner = importlib.import_module("sandbox.runner")
+    cleanup_scope=task.get("cleanupScope")
+    deletion_names=[]
+    if cleanup_scope:
+        from sandbox.cleanup import validate_scope, validate_cleanup_patch
+        deletion_names=validate_scope(cleanup_scope,commit_sha,task["issue"].get("body") or "")
+        if patch: validate_cleanup_patch(patch,cleanup_scope)
     request = models.ExecutionRequest(
         execution_id=ctx.task_id, repo_url=f"https://github.com/{task['repoFullName']}",
         commit_sha=commit_sha, command=command, timeout_seconds=math.floor(remaining), patch=patch,
@@ -41,6 +47,7 @@ def execute(ctx, *, commit_sha: str, command: list[str], patch: str = ""):
         require_ui_interaction=getattr(ctx, "require_ui_interaction", False),
         require_ui_report=getattr(ctx, "require_ui_report", False),
         require_ui_answers=getattr(ctx, "require_ui_answers", False),
+        allowed_deletions=deletion_names, verify_cleanup=bool(patch and deletion_names),
     )
     stopped = []
     next_check = 0.0
@@ -91,6 +98,7 @@ def execute(ctx, *, commit_sha: str, command: list[str], patch: str = ""):
         "command": command, "passed": result.status == "passed" and result.exit_code == 0
             and not result.oom_killed and result.cleanup_ok,
         "executionId": result.execution_id,
+        **({"allowedDeletions":deletion_names,"cleanupVerified":bool(patch and result.exit_code==0 and "CLEANUP GATE PASSED:" in result.stdout)} if deletion_names else {}),
         "testsRun": sum(int(n) for n in re.findall(r"\b(\d+) passed\b", result.stdout))
                     if command[:3] == ["python", "-m", "pytest"]
                     and not any(arg in {"--collect-only", "--co", "--version", "--help", "-h"} for arg in command) else 0,

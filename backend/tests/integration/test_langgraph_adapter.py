@@ -1,4 +1,4 @@
-"""Plan phase through the real LangGraph (LLM mocked, as in agent/test_graph.py)."""
+"""Plan phase through the real LangGraph (LLM mocked, as in backend/tests/agent/test_graph.py)."""
 
 import os
 import subprocess

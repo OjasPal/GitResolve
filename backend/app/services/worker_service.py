@@ -51,7 +51,7 @@ class ExecutionLimit(Exception):
         super().__init__(code.value)
 
 # Structured fields a worker may set through `update_progress`.
-PROGRESS_FIELDS = frozenset({"baseSha", "testCommand", "baseline", "reproduction"})
+PROGRESS_FIELDS = frozenset({"baseSha", "testCommand", "baseline", "reproduction", "cleanupScope"})
 _PHASE_FOR_STATUS = {
     TaskStatus.PLANNING: DispatchPhase.PLAN,
     TaskStatus.RUNNING: DispatchPhase.EXECUTE,
@@ -299,7 +299,7 @@ class WorkerService:
             from app.services.policy import validate_fix
             try:
                 from app.services.publication_patch import validate_publication
-                validate_publication(final_diff, ctx.task["limits"], verification or {}, ctx.task.get("baseSha"), ctx.task.get("sandboxVerification") or {})
+                validate_publication(final_diff, ctx.task["limits"], verification or {}, ctx.task.get("baseSha"), ctx.task.get("sandboxVerification") or {}, cleanup_scope=ctx.task.get("cleanupScope"))
             except ValueError as exc:
                 raise ExecutionLimit(FailureCode.POLICY_VIOLATION) from exc
             if diff_doc["truncated"]:

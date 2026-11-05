@@ -127,6 +127,37 @@ def test_publication_uses_reviewed_summary_instead_of_the_user_prompt(env):
     assert commit["message"] == "fix: Restore readable quiz cards"
 
 
+def test_cleanup_tree_deletes_exact_files_and_reconciles_a_lost_response(env,tmp_path):
+    from sandbox.cleanup import build_scope,deletion_patch
+    from app.services.ids import sha256_hash
+    task,_,api,creator=approved(env)
+    request="Remove all four root test .py files safely"
+    for i in range(4):(tmp_path/f"test_old_{i}.py").write_bytes(b"def test_old(): assert True\n")
+    scope={**build_scope(tmp_path,request,task["baseSha"]),"approved":True}
+    patch=deletion_patch(tmp_path,scope);digest=sha256_hash(patch)
+    task.update(cleanupScope=scope,issue={**task["issue"],"body":request},finalDiffHash=digest,
+        finalDiffSummary={"commitMessage":"chore: Remove unused root test files","branchName":"remove-root-tests"})
+    task["approval"]["diffHash"]=digest
+    task["sandboxVerification"].update(diffHash=digest,cleanupVerified=True,allowedDeletions=[f["path"] for f in scope["files"]])
+    source={'path':'src/slugify.py','mode':'100644','type':'blob','sha':'c'*40}
+    base=[source]+[{'path':f['path'],'mode':'100644','type':'blob','sha':'e'*40} for f in scope['files']]
+    original=api.request
+    def request_api(method,path,**kwargs):
+        if path.endswith('/git/trees/'+'b'*40):return {'tree':base}
+        if path.endswith('/git/blobs/'+'e'*40):return {'content':base64.b64encode(b"def test_old(): assert True\n").decode()}
+        if path.endswith('/git/commits/head'):return {'tree':{'sha':'result'},'parents':[{'sha':task['baseSha']}]}
+        if path.endswith('/git/trees/result'):return {'tree':[source]}
+        return original(method,path,**kwargs)
+    api.request=request_api
+    assert creator.create(task,patch).number==7
+    tree=next(kw['json']['tree'] for method,path,kw in api.calls if method=='POST' and path.endswith('/git/trees'))
+    assert len(tree)==4 and all(entry['sha'] is None and 'content' not in entry for entry in tree)
+    api.calls.clear()
+    api.existing=[{'number':7,'html_url':'https://github.com/demo/seeded-bugs/pull/7','base':{'ref':'main'},'head':{'sha':'head'},'body':f"<!-- gitresolve:{task['id']}:{digest} -->"}]
+    assert creator.create(task,patch).number==7
+    assert all(method=='GET' for method,_,_ in api.calls)
+
+
 def test_gateway_checks_fresh_user_permission_and_scopes_tokens(monkeypatch):
     store = MemoryStore()
     store.set('users/1', {'githubLogin': 'alice', 'installationIds': [10]})

@@ -30,7 +30,7 @@ class GitHubPullRequestCreator:
                                    'Exact diff approval and passing Docker pytest execution are required.')
         try:
             from app.services.publication_patch import validate_publication
-            validate_publication(diff, task['limits'], task.get('verification') or {}, task['baseSha'], receipt)
+            validate_publication(diff, task['limits'], task.get('verification') or {}, task['baseSha'], receipt, cleanup_scope=task.get('cleanupScope'))
             checkpoint()
             repo, client = self.gateway.authorized_client(task['userId'], task['repoId'], write=True)
             if repo.full_name != task['repoFullName']:
@@ -59,7 +59,9 @@ class GitHubPullRequestCreator:
                     raise GitHubClientError('unsupported_file')
                 blob = client._get(path + '/git/blobs/' + entry['sha'])
                 return base64.b64decode(blob['content'], validate=False).decode('utf-8'), entry['mode']
-            files = apply_diff(diff, read_file)
+            from sandbox.cleanup import validate_scope
+            deletions=validate_scope(task["cleanupScope"],task["baseSha"],task["issue"].get("body") or "") if task.get("cleanupScope") else []
+            files = apply_diff(diff, read_file, deletions)
             previous = None
             for line in diff.splitlines():
                 if line.startswith('--- '):
@@ -71,6 +73,9 @@ class GitHubPullRequestCreator:
             expected = {name: (entry['mode'], entry['sha']) for name, entry in entries.items()
                         if entry['type'] != 'tree'}
             for item in files:
+                if item.get('sha', 'present') is None:
+                    expected.pop(item['path'],None)
+                    continue
                 content = item['content'].encode('utf-8')
                 blob_sha = hashlib.sha1(f'blob {len(content)}\0'.encode() + content).hexdigest()
                 expected[item['path']] = (item['mode'], blob_sha)

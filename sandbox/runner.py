@@ -33,7 +33,7 @@ def _clean_output(raw: bytes | str, max_bytes: int) -> tuple[str, bool]:
 
 
 def _docker_run_args(container: str, repo_dir: Path, command: list[str], patch_path=None, max_diff_lines=150,
-                     profile="python", ui_entrypoint="", require_ui_checks=False, require_ui_interaction=False, require_ui_report=False, require_ui_answers=False) -> list[str]:
+                     profile="python", ui_entrypoint="", require_ui_checks=False, require_ui_interaction=False, require_ui_report=False, require_ui_answers=False, allowed_deletions=(), verify_cleanup=False) -> list[str]:
     args = [
         "docker", "run", "-d", "--pull", "never", "--name", container,
         "--user", "10001:10001", "--network", "none", "--read-only",
@@ -51,6 +51,8 @@ def _docker_run_args(container: str, repo_dir: Path, command: list[str], patch_p
         args += ["-e", f"GITRESOLVE_STREAMLIT_ENTRY={ui_entrypoint}", "-e", f"GITRESOLVE_REQUIRE_UI_CHECKS={int(require_ui_checks)}",
                  "-e", f"GITRESOLVE_REQUIRE_UI_INTERACTION={int(require_ui_interaction)}", "-e", f"GITRESOLVE_REQUIRE_UI_REPORT={int(require_ui_report)}",
                  "-e", f"GITRESOLVE_REQUIRE_UI_ANSWERS={int(require_ui_answers)}"]
+    if allowed_deletions:
+        args += ["-e", "GITRESOLVE_DELETE_PATHS="+json.dumps(list(allowed_deletions)), "-e", "GITRESOLVE_VERIFY_CLEANUP="+str(int(verify_cleanup))]
     image = "gitresolve-sandbox:streamlit" if profile == "streamlit" else IMAGE
     return args + [image, "python", "-I", "/usr/local/lib/gitresolve_entry.py", *command]
 
@@ -70,7 +72,7 @@ def run_sandbox(request: ExecutionRequest, allow_local_repo: bool = False, cance
     try:
         checkpoint(deadline, cancel)
         if request.patch:
-            validate_patch(request.patch, request.max_diff_lines)
+            validate_patch(request.patch, request.max_diff_lines, request.allowed_deletions)
         workspace = Path(tempfile.mkdtemp(prefix="gitresolve_"))
         repo = (source_provider(request, workspace, deadline, cancel) if source_provider
                 else acquire(request, workspace, deadline, cancel, allow_local_repo))
@@ -81,7 +83,7 @@ def run_sandbox(request: ExecutionRequest, allow_local_repo: bool = False, cance
             patch_path.chmod(0o644)
         attempted = True
         start = capture(_docker_run_args(container, repo, request.command, patch_path, request.max_diff_lines,
-                        request.profile, request.ui_entrypoint, request.require_ui_checks, request.require_ui_interaction, request.require_ui_report, request.require_ui_answers), deadline, cancel, 8192)
+                        request.profile, request.ui_entrypoint, request.require_ui_checks, request.require_ui_interaction, request.require_ui_report, request.require_ui_answers, request.allowed_deletions, request.verify_cleanup), deadline, cancel, 8192)
         if start.returncode:
             raise SandboxError("docker_start_failed", "Docker could not start the sandbox.")
         while True:

@@ -44,6 +44,10 @@ LLM_SPECIALIST_TIMEOUT_SECONDS=60
 
 ## Running Tests
 
+Explicit requests to remove up to four root `test*.py` files use a deterministic maintenance path. The plan names the exact files, pins their contents and checks application/configuration references before approval. Its removal-only line budget is shown in the plan (hard ceiling: 400); ordinary repairs retain their existing limits. Docker must pass the original suite before cleanup, rerun immutable copies of the original tests against the cleaned workspace, and verify that application source is unchanged. Missing evidence, references, changed files or a stale plan stop publication. General file deletion remains forbidden. Cleanup scope changes require a new investigation.
+
+Normal repairs keep bounded, structured failure history. Each new proposal receives the concrete failed checks and a required strategy change. Rewording an explanation does not make identical code a new attempt: repeated rejected proposals or persistent validation failures request a bounded reasoning review when provider health permits. Policy-blocked requests stop rather than spending all remaining attempts on the same forbidden operation.
+
 All unit tests use mocked provider responses and zero live paid inference credits:
 
 ```bash
@@ -53,7 +57,7 @@ uv run pytest -v
 To run only the agent test suite:
 
 ```bash
-uv run pytest agent -v
+uv run pytest backend/tests/agent -v
 ```
 
 To run backend integration tests:
@@ -74,5 +78,5 @@ uv run --directory backend pytest tests/integration/test_langgraph_adapter.py -v
 - `agent/graph.py` — LangGraph planning workflow with backward-compatible adapters.
 - `agent/repair.py` — Bounded repair execution workflow evaluating patch generation, test outcomes, triggers.
 - `agent/analysis_schema.py` — Structured Pydantic schema for issue analysis.
-- `agent/test_router.py` — Comprehensive unit test suite verifying primary/fallback routing and bounded retry behavior.
-- `agent/test_graph.py` — Graph state, workflow planning, and routing metadata tests.
+- `backend/tests/agent/test_router.py` — Comprehensive unit test suite verifying primary/fallback routing and bounded retry behavior.
+- `backend/tests/agent/test_graph.py` — Graph state, workflow planning, and routing metadata tests.

@@ -25,7 +25,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["backend/tests", "agent", "githubapp"]
+testpaths = ["backend/tests", "githubapp"]
 pythonpath = ["backend", "."]
 python_files = ["test_*.py"]
 

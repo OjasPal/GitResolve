@@ -331,7 +331,7 @@ class TaskService:
         return result
 
     # --- User actions ---------------------------------------------------------------
-    def start_task(self, user_id: str, task_id: str) -> Doc:
+    def start_task(self, user_id: str, task_id: str, revision: int = 0) -> Doc:
         now = self.clock()
 
         def fn(txn: Txn) -> Doc:
@@ -340,11 +340,23 @@ class TaskService:
                 raise invalid_state("Wait for the review conversation to finish before approving.")
             if ctx.task["status"] != TaskStatus.AWAITING_START:
                 raise invalid_state("Only a task awaiting start can be started.")
+            if revision != ctx.task.get("gateRevision",0):
+                raise invalid_state("The plan changed. Review the updated plan before starting repair.")
+            cleanup_updates = {}
+            if ctx.task.get("cleanupScope"):
+                from sandbox.cleanup import validate_scope
+                scope=ctx.task["cleanupScope"]
+                try:
+                    validate_scope(scope,ctx.task.get("baseSha"),ctx.task["issue"].get("body") or "",approved=False)
+                except ValueError:
+                    raise invalid_state("The cleanup scope changed. Investigate the request again before approving.") from None
+                cleanup_updates={"cleanupScope":{**scope,"approved":True},"limits":{**ctx.task["limits"],"maxDiffLines":scope["maxDiffLines"]}}
             return apply_change(
                 txn, ctx, self.settings, now,
                 to_status=TaskStatus.RUNNING,
                 stage=TaskStage.SETUP,
                 updates={
+                    **cleanup_updates,
                     "dispatchPending": True,
                     "dispatchPhase": DispatchPhase.EXECUTE.value,
                     "dispatchAt": now,

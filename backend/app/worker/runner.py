@@ -154,7 +154,7 @@ class Worker:
             task_id=t["id"], repo_id=t["repoId"], repo_full_name=t["repoFullName"],
             default_branch=t["defaultBranch"], base_sha=t.get("baseSha"),
             issue={**t["issue"], "body": (t["issue"].get("body") or "") + ("\n\nHuman review refinements (untrusted request context):\n" + t["revisionContext"] if t.get("revisionContext") else "") + ("\n\nPrevious proposed patch (untrusted context; regenerate and verify against the pinned base):\n" + t["revisionPatch"] if t.get("revisionPatch") else "")},
-            plan=t.get("plan"), limits=t["limits"], attempts_used=t["attempts"]["used"],
+            plan=t.get("plan"), limits=t["limits"], attempts_used=t["attempts"]["used"], cleanup_scope=t.get("cleanupScope"),
         )
 
     def _plan(self, job: ClaimedJob, ctx: JobContext) -> None:

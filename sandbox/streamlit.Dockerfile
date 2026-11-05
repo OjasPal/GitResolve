@@ -5,4 +5,7 @@ COPY streamlit_gate.py /usr/local/lib/python3.12/site-packages/gitresolve_stream
 COPY streamlit_gate.py /usr/local/lib/gitresolve_streamlit_gate.py
 COPY streamlit_pytest.py /usr/local/lib/gitresolve_streamlit_pytest.py
 COPY container_entry.py /usr/local/lib/gitresolve_entry.py
+COPY cleanup.py /usr/local/lib/python3.12/site-packages/gitresolve_cleanup.py
+COPY cleanup_verify.py /usr/local/lib/gitresolve_cleanup_verify.py
+COPY cleanup_pytest.py /usr/local/lib/gitresolve_cleanup_pytest.py
 USER 10001:10001

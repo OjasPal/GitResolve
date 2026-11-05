@@ -32,6 +32,8 @@ def converse(service, user_id, task_id, request, router=None):
             raise ApiError(409, "stale_review", "The review changed. Refresh before sending your message.")
         if task.get("gateChatBusy") and task.get("gateChatUntil", now) > now:
             raise ApiError(409, "conversation_busy", "The agent is preparing a reply. Please wait.")
+        if request.operation == "revise" and task["status"] == TaskStatus.AWAITING_APPROVAL and task.get("cleanupScope"):
+            raise ApiError(409,"restart_required","Changing a file-removal plan requires a new investigation. Start a new repair with the updated file list.")
         if request.operation == "prompt" and task["status"] != TaskStatus.AWAITING_START:
             raise ApiError(409, "restart_required", "Changing the original request at this stage requires a new workflow. Use Request changes to refine this fix.")
         if request.operation != "ask" and ctx.holder_active:
@@ -115,7 +117,7 @@ def converse(service, user_id, task_id, request, router=None):
                     if not prompt:
                         raise ApiError(502, "invalid_model_response", "The agent could not prepare an updated request. Your current plan is unchanged.")
                     updates.update({"issue": {**current["issue"], "body": prompt}, "plan": None,
-                        "originalPrompt": current.get("originalPrompt", current["issue"].get("body")),
+                        "cleanupScope": DELETE_FIELD, "originalPrompt": current.get("originalPrompt", current["issue"].get("body")),
                         "dispatchPhase": DispatchPhase.PLAN.value, "revisionContext": "", "revisionPatch": ""})
                     status, stage = TaskStatus.QUEUED, TaskStage.PLAN
                 else:

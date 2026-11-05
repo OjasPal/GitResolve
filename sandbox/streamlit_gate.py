@@ -118,12 +118,22 @@ class VisibleText(HTMLParser):
             self.text.append(text)
 
 
+def with_sandbox_timeout(run):
+    """Allow cold container startup while respecting explicit test deadlines."""
+    def run_with_timeout(app, widget_state=None, timeout=None):
+        if timeout is None:
+            timeout = max(app.default_timeout, 15)
+        return run(app, widget_state, timeout=timeout)
+
+    return run_with_timeout
+
+
 def pytest_configure(config):
     from streamlit.testing.v1 import AppTest
     expected = (Path("/workspace") / os.environ["GITRESOLVE_STREAMLIT_ENTRY"]).resolve()
     evidence = {"runs": 0, "widgets": {}, "errors": [], "report_seen": False, "answer_states": set()}
     config._gitresolve_ui = evidence
-    original = AppTest._run
+    original = with_sandbox_timeout(AppTest._run)
 
     def checked_run(self, *args, **kwargs):
         result = original(self, *args, **kwargs)

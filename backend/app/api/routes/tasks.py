@@ -12,6 +12,7 @@ from app.schemas.resources import (
 )
 from app.schemas.tasks import (
     ApproveRequest,
+    StartRequest,
     GateChatRequest,
     CreateTaskRequest,
     TaskListResponse,
@@ -74,11 +75,12 @@ def gate_conversation(body: GateChatRequest, task_id: str = TASK_ID, user_id: st
 @router.post("/{task_id}/start", response_model=TaskResponse, responses=ERRORS)
 def start_task(
     task_id: str = TASK_ID,
+    body: StartRequest | None = None,
     user_id: str = Depends(writer_user_id),
     service: TaskService = Depends(get_task_service),
 ) -> TaskResponse:
     """Human gate 1: start repair after reviewing the plan (`awaiting_start` -> `running`)."""
-    return TaskResponse.from_doc(service.start_task(user_id, task_id))
+    return TaskResponse.from_doc(service.start_task(user_id, task_id, body.revision if body else 0))
 
 
 @router.post("/{task_id}/cancel", response_model=TaskResponse, responses=ERRORS)

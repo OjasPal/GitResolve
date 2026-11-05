@@ -70,6 +70,9 @@ class LangGraphAgentRunner:
         with ctx.repository() as repo_path:
             state["repo_path"] = str(repo_path) if repo_path else None
             if repo_path:
+                from app.agent.cleanup_runner import cleanup_plan
+                cleanup = cleanup_plan(task,ctx,repo_path)
+                if cleanup is not None: return cleanup
                 from app.agent.repair_runner import repository_context
                 state["issue_body"] += "\n\nUNTRUSTED REPOSITORY CONTEXT\n" + repository_context(Path(repo_path), 30000)
             ctx.event(EventType.LLM_CALL, "Requesting an investigation plan from the configured model provider.")
