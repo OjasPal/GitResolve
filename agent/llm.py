@@ -48,11 +48,8 @@ def analyze_issue_with_router(
     issue_body: str,
     router: ModelRouter | None = None,
     task_id: str | None = None,
-    escalate: bool = False,
-    escalation_reason: str = "Complex issue reasoning escalation",
-    escalation_count: int = 0,
 ) -> tuple[IssueAnalysis, RouterResult]:
-    """Analyze a GitHub issue using the model router with automatic provider failover or escalation."""
+    """Analyze a GitHub issue using the model router with automatic provider failover."""
     active_router = router or get_router()
     prompt = build_analysis_prompt(
         repo_full_name=repo_full_name,
@@ -61,20 +58,7 @@ def analyze_issue_with_router(
         issue_body=issue_body,
     )
 
-    if escalate:
-        router_result = active_router.escalate_specialist(
-            prompt=prompt,
-            escalation_reason=escalation_reason,
-            schema=IssueAnalysis,
-            task_id=task_id,
-            current_escalation_count=escalation_count,
-        )
-    else:
-        router_result = active_router.route_normal(
-            prompt=prompt,
-            schema=IssueAnalysis,
-            task_id=task_id,
-        )
+    router_result = active_router.route_normal(prompt=prompt, schema=IssueAnalysis, task_id=task_id)
 
     parsed = router_result.result.parsed
     if isinstance(parsed, IssueAnalysis):
@@ -94,9 +78,6 @@ def analyze_issue_with_gemini(
     issue_body: str,
     router: ModelRouter | None = None,
     task_id: str | None = None,
-    escalate: bool = False,
-    escalation_reason: str = "Complex issue reasoning escalation",
-    escalation_count: int = 0,
 ) -> IssueAnalysis:
     """Backward-compatible entry point for existing callers and tests.
 
@@ -109,9 +90,6 @@ def analyze_issue_with_gemini(
         issue_body=issue_body,
         router=router,
         task_id=task_id,
-        escalate=escalate,
-        escalation_reason=escalation_reason,
-        escalation_count=escalation_count,
     )
     object.__setattr__(analysis, "_router_result", router_result)
     return analysis

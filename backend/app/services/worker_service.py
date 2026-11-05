@@ -275,7 +275,7 @@ class WorkerService:
                 txn, ctx, self.settings, now,
                 to_status=TaskStatus.AWAITING_START,
                 stage=TaskStage.PLAN,
-                updates={"plan": plan_doc, "dispatchPhase": None, **release_lease()},
+                updates={"plan": plan_doc, **({"issue": {**ctx.task["issue"], "title": (plan.title or plan.problem_summary).split("\n")[0][:100]}} if ctx.task["issue"].get("number") is None else {}), "dispatchPhase": None, **release_lease()},
                 events=[EventSpec(EventType.INFO, "Plan ready for review.")],
             )
 

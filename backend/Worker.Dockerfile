@@ -1,12 +1,11 @@
 FROM python:3.12-slim
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-WORKDIR /opt/gitresolve/backend
-COPY backend/pyproject.toml ./
-COPY backend/app ./app
-COPY agent /opt/gitresolve/agent
-COPY githubapp /opt/gitresolve/githubapp
-COPY sandbox /opt/gitresolve/sandbox
-RUN pip install --no-cache-dir '.[firestore,agent]' \
-    && useradd --create-home --uid 10001 worker
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/opt/gitresolve/backend
+WORKDIR /opt/gitresolve
+COPY pyproject.toml README.md ./
+COPY backend/app ./backend/app
+COPY agent ./agent
+COPY githubapp ./githubapp
+COPY sandbox ./sandbox
+RUN pip install --no-cache-dir '.[firestore]' && useradd --create-home --uid 10001 appuser
 USER 10001
 CMD ["python", "-m", "app.worker.runner"]

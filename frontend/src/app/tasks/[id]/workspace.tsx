@@ -14,6 +14,7 @@ import {
 import {
   EventView,
   TaskResponse} from "@/types";
+import { GateConversation } from "@/components/GateConversation";
 import { StatusBadge } from "@/components/StatusBadge";
 import { StageStepper } from "@/components/StageStepper";
 import { ActionButtons } from "@/components/ActionButtons";
@@ -45,6 +46,7 @@ function TaskWorkspaceContent() {
 
   const [workerStatus, setWorkerStatus] = useState<string | null>(null);
   const [task, setTask] = useState<TaskResponse | null>(null);
+  const [planEditing, setPlanEditing] = useState(false);
   const [events, setEvents] = useState<EventView[]>([]);
   const [activeTab, setActiveTab] = useState<"investigation" | "plan" | "diff" | "tests" | "pr" | "events">("investigation");
 
@@ -55,7 +57,7 @@ function TaskWorkspaceContent() {
 
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
-  const isPolling = Boolean(task && ["queued", "planning", "running", "creating_pr"].includes(task.status));
+  const isPolling = Boolean(task && (task.gateChatBusy || ["queued", "planning", "running", "creating_pr"].includes(task.status)));
 
   const nextAfterRef = useRef<number>(0);
 
@@ -256,10 +258,10 @@ function TaskWorkspaceContent() {
               <span className="font-mono text-xs px-2 py-0.5 rounded border border-neutral-200 dark:border-neutral-800 bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300">
                 {task.repoFullName} {task.issue.number ? `#${task.issue.number}` : "Direct report"}
               </span>
-              <StatusBadge status={task.status} />
+              {task.failure?.code === "llm_unavailable" ? <span className="status-chip" data-tone="warn">{task.stage === "evaluate" ? "Evaluation incomplete" : "Investigation paused"}</span> : <StatusBadge status={task.status} />}
             </div>
             <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100 truncate">
-              {task.issue.title || `Issue #${task.issue.number}`}
+              {task.issue.number ? task.issue.title || `Issue #${task.issue.number}` : task.plan ? (task.plan.title || task.plan.problemSummary || task.issue.title || "Repair request").split(/[.!?\n]/)[0].slice(0, 100) : "Analyzing your request"}
             </h1>
           </div>
 
@@ -267,6 +269,8 @@ function TaskWorkspaceContent() {
           <div className="shrink-0 task-actions">
             <ActionButtons
               task={task}
+              planEditing={planEditing || Boolean(task.gateChatBusy)}
+              diffText={loadedDiffHash === task.finalDiffHash ? diffContent : undefined}
               reviewedDiffHash={activeTab === "diff" ? loadedDiffHash : null}
               onReviewDiff={() => setActiveTab("diff")}
               onActionSuccess={(updated) => setTask(updated)}
@@ -280,9 +284,9 @@ function TaskWorkspaceContent() {
             <XCircle className="w-4 h-4 shrink-0 mt-0.5" />
             <div className="space-y-0.5">
               <p className="font-semibold">
-                Task Terminated: {task.failure.code} {task.failure.phase ? `(${task.failure.phase} phase)` : ""}
+                {task.failure.code === "llm_unavailable" ? (task.stage === "evaluate" ? "Evaluation incomplete" : "Investigation temporarily paused") : task.failure.code === "timeout" ? "This repair needs more time" : task.failure.code === "no_fix_found" ? "This repair needs another look" : task.failure.code === "sandbox_error" ? "The test environment needs attention" : "This repair couldn’t finish"}
               </p>
-              <p className="font-mono text-neutral-700 dark:text-neutral-300">{task.failure.message}</p>
+              <p className="text-sm">{task.failure.code === "llm_unavailable" ? "The model service couldn’t complete this step. Your progress and evidence are saved below. No pull request will be created without the required checks. Please try again once the service is available." : task.failure.code === "timeout" ? "The run reached its time limit. Your progress is saved below; try a smaller change or start another run." : task.failure.code === "no_fix_found" ? "The agent tried several approaches but hasn’t verified a safe fix. Review the evidence below and try a more focused request." : "We couldn’t complete verification. Your repository is unchanged. Review the details or try again."}</p>
             </div>
           </div>
         )}
@@ -316,6 +320,7 @@ function TaskWorkspaceContent() {
         </div>
       </div>
 
+      <GateConversation key={task.id + task.status + (task.gateRevision||0)} task={task} onSave={setTask} onEditingChange={setPlanEditing}/>
       <div className="task-split"><aside className="task-live-rail glass-card"><span className="eyebrow">Repair progress</span><StageStepper currentStage={task.stage} status={task.status}/><div className="mt-8 border-t border-neutral-800 pt-6"><EventTimeline events={events} isPolling={isPolling}/></div></aside><section className="task-tab-content"><div className="task-tabs" role="tablist" aria-label="Repair evidence">{([{id:"plan",name:"Plan"},{id:"investigation",name:"Evidence"},{id:"diff",name:"Diff"},{id:"tests",name:"Tests"},{id:"pr",name:"Pull request"},{id:"events",name:`Events (${events.length})`}] as const).map(tab=><button key={tab.id} role="tab" aria-selected={activeTab===tab.id} onClick={()=>setActiveTab(tab.id)}>{tab.name}</button>)}</div>
       {/* Tab 1: Investigation */}
       {activeTab === "investigation" && (

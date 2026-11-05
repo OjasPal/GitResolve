@@ -74,7 +74,7 @@ def test_image_context_uses_vision_and_reserves_model_budget(tmp_path, monkeypat
             observed.append(prompt)
             return SimpleNamespace(result=SimpleNamespace(parsed=ImageObservations(observations="A clipped quiz card."), usage=None))
     monkeypatch.setattr("agent.router.ModelRouter", Router)
-    monkeypatch.setattr("agent.router.get_router", lambda: SimpleNamespace(settings=None, get_provider=lambda _: None))
+    monkeypatch.setattr("agent.router.get_router", lambda: SimpleNamespace(settings=None, get_provider=lambda _: None, health=None))
     model_task = AgentTask(task_id=task["id"], repo_id=REPO_ID, repo_full_name=task["repoFullName"], default_branch=task["defaultBranch"], base_sha=None, issue=task["issue"], plan=None, limits=task["limits"])
     context = attachment_context(model_task, ctx)
     assert "clipped quiz card" in context

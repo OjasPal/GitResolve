@@ -17,6 +17,7 @@ class AgentState(TypedDict):
     pr_number: NotRequired[int]
 
     stage: str
+    task_title: str
     problem_summary: str
     likely_files: list[str]
     plan: list[str]

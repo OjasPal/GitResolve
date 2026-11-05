@@ -8,7 +8,6 @@ from githubapp.patch import apply_diff
 from app.schemas.enums import FailureCode
 from app.services.ids import sha256_hash
 from app.services.github import GitHubUnavailable
-from app.services.policy import validate_fix
 from app.worker.pr import PullRequestError, PullRequestResult
 from app.worker.publication_text import publication_subject, reserve_branch
 
@@ -36,16 +35,11 @@ class GitHubPullRequestCreator:
             repo, client = self.gateway.authorized_client(task['userId'], task['repoId'], write=True)
             if repo.full_name != task['repoFullName']:
                 raise GitHubClientError('access_revoked')
-            # Resolve the real App bot rather than attributing commits to an unrelated username.
-            app_client = __import__("githubapp.client", fromlist=["GitHubClient"]).GitHubClient(self.gateway.auth._generate_jwt())
-            app = app_client._get('/app')
-            if str(app.get('id')) != str(self.gateway.settings.github_app_id):
-                raise GitHubClientError('github_auth_error')
-            bot = client._get('/users/' + quote(app['slug'] + '[bot]', safe=''))
-            if bot.get('type') != 'Bot' or bot.get('login') != app['slug'] + '[bot]':
-                raise GitHubClientError('github_auth_error')
-            identity = {'name': bot['login'], 'email': str(bot['id']) + '+' + bot['login'] + '@users.noreply.github.com', 'date': task['createdAt'].isoformat()}
-            path = f'/repos/{repo.full_name}' 
+            # Verify the GitHub App bot identity before any read or write. This fails
+            # closed: there is deliberately no fallback or hardcoded commit identity.
+            identity = self.gateway.verified_bot_identity(client)
+            commit_date = task['createdAt'].isoformat()
+            path = f'/repos/{repo.full_name}'
             subject = publication_subject(task, diff)
             branch = reserve_branch(self.gateway.store, task, subject, digest)
             subject = self.gateway.store.get("tasks/" + task["id"])["publication"]["commitMessage"]
@@ -98,8 +92,8 @@ class GitHubPullRequestCreator:
                 'message': subject,
                 'tree': new_tree['sha'], 'parents': [task['baseSha']],
                 # Stable identity/date make retries produce the same commit SHA.
-                'author': identity,
-                'committer': identity,
+                'author': identity.git_actor(commit_date),
+                'committer': identity.git_actor(commit_date),
             })
             checkpoint()
             try:

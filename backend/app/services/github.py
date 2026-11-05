@@ -71,6 +71,9 @@ class WorkerGitHubGateway(GitHubGateway, Protocol):
     def source(self, task: dict) -> Callable[..., Path]:
         """Return a bounded, cancellation-aware snapshot acquisition callback."""
 
+    def verified_bot_identity(self, client):
+        """Return the GitHub App bot identity verified via GET /app and GET /users/<bot>."""
+
 
 class FakeGitHubGateway:
     """Deterministic local stand-in. Any user sees the same demo repository."""
@@ -122,3 +125,7 @@ class FakeGitHubGateway:
         if repo_id != self.REPO.repo_id:
             return None
         return self._issues.get(number)
+
+    def verified_bot_identity(self, client):
+        from githubapp.identity import BotIdentity, EXPECTED_APP_SLUG, EXPECTED_BOT_USER_ID
+        return BotIdentity(f"{EXPECTED_APP_SLUG}[bot]", EXPECTED_BOT_USER_ID)

@@ -4,6 +4,8 @@ from pydantic import BaseModel, Field
 class IssueAnalysis(BaseModel):
     """Structured output expected from the issue-analysis LLM."""
 
+    task_title: str = Field(default="", max_length=100, description="A short action title, 5 to 10 words, describing the requested change. Never copy the full prompt.")
+
     problem_summary: str = Field(
         description="A concise summary of the reported bug."
     )

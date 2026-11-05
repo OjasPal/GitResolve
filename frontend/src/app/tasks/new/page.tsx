@@ -158,7 +158,7 @@ export default function NewRepairPage() {
         <div className="border-b border-neutral-200 dark:border-neutral-800 pb-4">
           <h1 className="text-2xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
             <Wrench className="w-6 h-6 text-neutral-600 dark:text-neutral-400" />
-            <span>What needs fixing?</span>
+            <span>New repair.</span>
           </h1>
           <p className="text-sm text-neutral-500 dark:text-neutral-400 mt-1">
             Choose a repository. Bring an issue, or describe the bug in your own words.
@@ -190,9 +190,7 @@ export default function NewRepairPage() {
           {/* Issue Mode Toggle */}
           <div className="space-y-2 pt-2 border-t border-neutral-200 dark:border-neutral-800">
             <div className="flex items-center justify-between">
-              <label className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
-                What needs fixing?
-              </label>
+
               <div className="flex items-center gap-1 p-0.5 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-100 dark:bg-neutral-800 text-xs">
                 <button
                   type="button"
@@ -300,7 +298,7 @@ export default function NewRepairPage() {
               )}
             </button>
           </div>
-        </form><aside className="glass-card repair-limits"><span className="eyebrow">You stay in control</span><h2>Plan first.<br/>Repair second.</h2><p className="neutral-note">Review the investigation plan before the agent starts changing code.</p><div className="border-t border-neutral-800 py-5 mt-6"><p className="text-sm">Standard safety limits</p><ul className="text-sm text-neutral-500 space-y-4 mt-5"><li>3 repair attempts</li><li>20 minute task budget</li><li>5 changed files / 150 lines</li><li>Isolated test execution</li></ul></div><p className="neutral-note">The server enforces the limits shown on your created task. A pull request requires your exact-diff approval.</p></aside></div>
+        </form><aside className="glass-card repair-limits"><span className="eyebrow">You stay in control</span><h2>Plan first.<br/>Repair second.</h2><p className="neutral-note">Review the investigation plan before the agent starts changing code.</p><div className="border-t border-neutral-800 py-5 mt-6"><p className="text-sm">Standard safety limits</p><ul className="text-sm text-neutral-500 space-y-4 mt-5"><li>6 repair attempts</li><li>30 minute task budget</li><li>5 changed files / 150 lines</li><li>Isolated test execution</li></ul></div><p className="neutral-note">The server enforces the limits shown on your created task. A pull request requires your exact-diff approval.</p></aside></div>
       </div>
     </ProtectedRoute>
   );

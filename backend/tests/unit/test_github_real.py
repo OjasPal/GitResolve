@@ -11,6 +11,11 @@ from app.worker.github_pr import GitHubPullRequestCreator
 from app.worker.pr import PullRequestError
 from tests.integration.test_task_lifecycle import drive_to_awaiting_approval
 
+from githubapp.client import GitHubClientError
+from githubapp.identity import BotIdentity
+
+IDENTITY = BotIdentity('gitresolve-agent[bot]', 351129099)
+
 
 class MockAPI:
     def __init__(self):
@@ -45,7 +50,8 @@ def approved(env):
         'command': ['python', '-m', 'pytest'], 'baseSha': task['baseSha'], 'diffHash': task['finalDiffHash']}
     diff = env.store.get(f"tasks/{task['id']}/artifacts/final_diff")['content']
     api = MockAPI()
-    gateway = SimpleNamespace(store=env.store, authorized_client=lambda *a, **kw:
+    gateway = SimpleNamespace(store=env.store, verified_bot_identity=lambda client: IDENTITY,
+                              authorized_client=lambda *a, **kw:
                               (SimpleNamespace(full_name=task['repoFullName']), api))
     return task, diff, api, GitHubPullRequestCreator(gateway)
 
@@ -75,7 +81,13 @@ def test_publication_writes_only_approved_tree_then_draft_pr(env):
     assert 'tsk_' not in writes[1][1]['message'] and len(writes[1][1]['message']) <= 72
     assert result.branch.startswith('gitresolve-agent/') and 'tsk_' not in result.branch
     assert writes[-1][1]['title'] == writes[1][1]['message']
-    assert writes[1][1]['author']['name'] == 'gitresolve-agent'
+    commit = writes[1][1]
+    expected = '351129099+gitresolve-agent[bot]@users.noreply.github.com'
+    for role in ('author', 'committer'):
+        assert commit[role]['name'] == 'GitResolve Agent'
+        assert commit[role]['email'] == expected
+    assert commit['author'] == commit['committer']
+    assert 'gitresolve@users.noreply.github.com' not in str(commit)
     assert events and not any('/merge' in path for _, path, _ in api.calls)
 
 
@@ -199,3 +211,32 @@ def test_github_worker_errors_become_safe_task_failures(env, code):
     task = env.get(headers, tid)
     assert task['status'] == 'failed_infra'
     assert task['failure']['code'] == code and task['pr'] is None
+
+def test_publication_refuses_when_bot_identity_unverified(env):
+    task, diff, api, creator = approved(env)
+    def fail(client):
+        raise GitHubClientError('bot_identity_invalid')
+    creator.gateway.verified_bot_identity = fail
+    with pytest.raises(PullRequestError):
+        creator.create(task, diff)
+    assert api.calls == []  # nothing read or written, no fallback identity
+
+
+def test_gateway_verifies_bot_identity_once_via_app_jwt_client():
+    app_client = SimpleNamespace(request=lambda m, p, **kw: {'id': 12345, 'slug': 'gitresolve-agent'})
+    user_client = SimpleNamespace(request=lambda m, p, **kw:
+        {'login': 'gitresolve-agent[bot]', 'id': 351129099, 'type': 'Bot'})
+    calls = []
+    auth = SimpleNamespace(app_id='12345', app_client=lambda: calls.append(1) or app_client)
+    gateway = RealGitHubGateway(Settings(_env_file=None), MemoryStore(), auth=auth)
+    first = gateway.verified_bot_identity(user_client)
+    assert first.email == '351129099+gitresolve-agent[bot]@users.noreply.github.com'
+    assert gateway.verified_bot_identity(user_client) is first and calls == [1]
+
+
+def test_gateway_rejects_wrong_app_id():
+    app_client = SimpleNamespace(request=lambda m, p, **kw: {'id': 999, 'slug': 'gitresolve-agent'})
+    auth = SimpleNamespace(app_id='12345', app_client=lambda: app_client)
+    gateway = RealGitHubGateway(Settings(_env_file=None), MemoryStore(), auth=auth)
+    with pytest.raises(GitHubClientError):
+        gateway.verified_bot_identity(SimpleNamespace())

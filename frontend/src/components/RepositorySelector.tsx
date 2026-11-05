@@ -79,7 +79,10 @@ export function RepositorySelector({
       {/* Main trigger button */}
       <button
         type="button"
+        aria-expanded={isOpen}
+        aria-haspopup="dialog"
         disabled={loading}
+        onKeyDown={e=>{if(e.key==="Escape")setIsOpen(false)}}
         onClick={() => setIsOpen((prev) => !prev)}
         className="w-full px-3.5 py-2.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-left flex items-center justify-between gap-3 text-sm hover:border-neutral-400 dark:hover:border-neutral-600 transition-colors disabled:opacity-50 cursor-pointer"
       >
@@ -125,7 +128,7 @@ export function RepositorySelector({
 
       {/* Dropdown Popover */}
       {isOpen && (
-        <div className="absolute z-50 left-0 right-0 top-full mt-1 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-xl overflow-hidden">
+        <div role="dialog" aria-label="Choose a repository" className="repo-dropdown absolute z-50 left-0 right-0 top-full mt-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-xl overflow-hidden">
           {/* Search filter input */}
           <div className="p-2 border-b border-neutral-200 dark:border-neutral-800 flex items-center gap-2">
             <Search className="w-4 h-4 text-neutral-400 shrink-0 ml-1" />
@@ -134,7 +137,9 @@ export function RepositorySelector({
               autoFocus
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search repositories by name or language..."
+              aria-label="Search repositories"
+              onKeyDown={e=>{if(e.key==="Escape")setIsOpen(false)}}
+              placeholder="Search Repositories"
               className="w-full text-xs bg-transparent py-1 text-neutral-900 dark:text-neutral-100 placeholder:text-neutral-400 focus:outline-none"
             />
           </div>

@@ -175,11 +175,12 @@ export async function cancelTask(taskId: string): Promise<TaskResponse> {
 
 export async function approveTask(
   taskId: string,
-  diffHash: string
+  diffHash: string,
+  revision = 0
 ): Promise<TaskResponse> {
   return request<TaskResponse>(`/tasks/${taskId}/approve`, {
     method: "POST",
-    body: JSON.stringify({ diffHash }),
+    body: JSON.stringify({ diffHash, revision }),
   });
 }
 
@@ -225,3 +226,5 @@ export async function checkBackendHealth(): Promise<BackendHealth> {
     return { status: "disconnected" };
   }
 }
+
+export function gateConversation(id:string,body:{message:string;operation:"ask"|"revise"|"prompt";revision:number;requestId:string}):Promise<TaskResponse>{return request(`/tasks/${id}/conversation`,{method:"POST",body:JSON.stringify(body)})}

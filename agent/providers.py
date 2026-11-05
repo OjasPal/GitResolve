@@ -1,14 +1,9 @@
 import abc
 import json
 import socket
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, TypeVar
-
-try:
-    from anthropic import AnthropicVertex
-    import anthropic
-except ImportError:
-    AnthropicVertex = None  # type: ignore[assignment, misc]
-    anthropic = None  # type: ignore[assignment]
 
 try:
     from google import genai
@@ -44,12 +39,13 @@ class ModelResult:
 
 class ProviderError(Exception):
     """Base exception for provider calls."""
-    def __init__(self, message: str, provider: str, model_id: str, status_code: int | None = None, original_error: Exception | None = None):
+    def __init__(self, message: str, provider: str, model_id: str, status_code: int | None = None, original_error: Exception | None = None, retry_after: float | None = None):
         super().__init__(sanitize_error(message))
         self.provider = provider
         self.model_id = model_id
         self.status_code = status_code
         self.original_error = original_error
+        self.retry_after = retry_after
 
 
 class RetryableProviderError(ProviderError):
@@ -66,11 +62,11 @@ class FatalProviderError(ProviderError):
     pass
 
 
-def classify_error(exc: Exception, provider: str, model_id: str) -> ProviderError:
+def _classify_error(exc: Exception, provider: str, model_id: str) -> ProviderError:
     """Classify an exception as either retryable or fatal."""
     status_code: int | None = None
 
-    # Check Anthropic status code
+    # Read HTTP status code
     if hasattr(exc, "status_code") and isinstance(getattr(exc, "status_code"), int):
         status_code = exc.status_code
     # Check GenAI code
@@ -82,13 +78,6 @@ def classify_error(exc: Exception, provider: str, model_id: str) -> ProviderErro
             "Cloud model quota exhausted. Check Vertex AI quotas for this model/project or use an available configured provider.",
             provider, model_id, status_code=429, original_error=exc)
 
-    # Check for authentication / permission / config errors
-    if anthropic is not None and isinstance(exc, (anthropic.AuthenticationError, anthropic.PermissionDeniedError)):
-        return FatalProviderError(f"Authentication/Permission error: {exc}", provider, model_id, status_code=status_code or 401, original_error=exc)
-
-    if anthropic is not None and isinstance(exc, anthropic.BadRequestError):
-        return FatalProviderError(f"Bad request / invalid configuration: {exc}", provider, model_id, status_code=status_code or 400, original_error=exc)
-
     if "DefaultCredentialsError" in type(exc).__name__:
         return FatalProviderError(f"Missing Application Default Credentials: {exc}", provider, model_id, status_code=401, original_error=exc)
 
@@ -97,16 +86,10 @@ def classify_error(exc: Exception, provider: str, model_id: str) -> ProviderErro
             return FatalProviderError(f"Client error ({status_code}): {exc}", provider, model_id, status_code=status_code, original_error=exc)
 
     # Check for retryable conditions
-    if status_code in (429, 500, 502, 503, 504, 529):
+    if status_code in (408, 429, 500, 502, 503, 504, 529):
         return RetryableProviderError(f"Transient HTTP error ({status_code}): {exc}", provider, model_id, status_code=status_code, original_error=exc)
 
     retryable_types: list[type[Exception]] = [TimeoutError, ConnectionError, socket.timeout]
-    if anthropic is not None:
-        retryable_types.extend(
-            error_type for name in ("RateLimitError", "InternalServerError", "ServiceUnavailableError",
-                "OverloadedError", "APIConnectionError", "APITimeoutError", "DeadlineExceededError")
-            if isinstance((error_type := getattr(anthropic, name, None)), type)
-        )
     if genai_errors is not None:
         retryable_types.append(genai_errors.ServerError)
 
@@ -122,6 +105,25 @@ def classify_error(exc: Exception, provider: str, model_id: str) -> ProviderErro
     return FatalProviderError(f"Provider error: {exc}", provider, model_id, status_code=status_code, original_error=exc)
 
 
+def classify_error(exc, provider, model_id):
+    classified = _classify_error(exc, provider, model_id)
+    headers = getattr(getattr(exc, "response", None), "headers", None) or getattr(exc, "headers", {}) or {}
+    hint = headers.get("Retry-After") or headers.get("retry-after")
+    try:
+        classified.retry_after = max(0, float(hint))
+    except (TypeError, ValueError):
+        try:
+            classified.retry_after = max(0, (parsedate_to_datetime(hint) - datetime.now(timezone.utc)).total_seconds())
+        except (TypeError, ValueError, OverflowError):
+            # Google RPC RetryInfo is sometimes returned instead of a header.
+            details = (getattr(exc, "response_json", {}) or {}).get("error", {}).get("details", [])
+            for detail in details:
+                if "RetryInfo" in detail.get("@type", ""):
+                    try: classified.retry_after = max(0, float(detail["retryDelay"].rstrip("s")))
+                    except (KeyError, TypeError, ValueError): pass
+    return classified
+
+
 class BaseProvider(abc.ABC):
     @abc.abstractmethod
     def generate(
@@ -133,114 +135,6 @@ class BaseProvider(abc.ABC):
         task_id: str | None = None,
     ) -> ModelResult:
         pass
-
-
-class AnthropicVertexProvider(BaseProvider):
-    def __init__(self, settings: RouterSettings | None = None):
-        self.settings = settings or get_router_settings()
-        self.project_id = self.settings.anthropic_vertex_project_id
-        self.region = self.settings.anthropic_vertex_region
-        self._client: AnthropicVertex | None = None
-
-    def _get_client(self) -> AnthropicVertex:
-        if AnthropicVertex is None:
-            raise FatalProviderError(
-                "anthropic package with vertex extra is not installed. Install with: uv add 'anthropic[vertex]>=2.3.0'",
-                provider="anthropic",
-                model_id="",
-            )
-        if self._client is None:
-            if not self.project_id:
-                raise FatalProviderError(
-                    "ANTHROPIC_VERTEX_PROJECT_ID or GOOGLE_CLOUD_PROJECT must be configured.",
-                    provider="anthropic",
-                    model_id="",
-                )
-            self._client = AnthropicVertex(
-                project_id=self.project_id,
-                region=self.region,
-                timeout=self.settings.request_timeout_seconds,
-                max_retries=0,
-            )
-        return self._client
-
-    def generate(
-        self,
-        model_id: str,
-        prompt: str,
-        schema: type[T] | None = None,
-        system_instruction: str | None = None,
-        task_id: str | None = None,
-    ) -> ModelResult:
-        try:
-            client = self._get_client()
-
-            content = prompt
-            if isinstance(prompt, ImageContextPrompt):
-                import base64
-                content = [{"type": "text", "text": str(prompt)}] + [
-                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64.b64encode(image).decode()}}
-                    for image in prompt.images]
-            messages = [{"role": "user", "content": content}]
-            kwargs: dict[str, Any] = {
-                "model": model_id,
-                "max_tokens": self.settings.max_output_tokens,
-                "messages": messages,
-            }
-            if system_instruction:
-                kwargs["system"] = system_instruction
-
-            if schema is not None:
-                # Use client.messages.parse for Pydantic structured output
-                response = client.messages.parse(
-                    output_format=schema,
-                    **kwargs,
-                )
-                parsed = response.parsed
-                raw_text = ""
-                # Attempt to extract text from content blocks if available
-                if hasattr(response, "content") and response.content:
-                    raw_text = "\n".join(
-                        getattr(b, "text", "") for b in response.content if hasattr(b, "text")
-                    )
-            else:
-                response = client.messages.create(**kwargs)
-                parsed = None
-                raw_text = ""
-                if hasattr(response, "content") and response.content:
-                    raw_text = "\n".join(
-                        getattr(b, "text", "") for b in response.content if hasattr(b, "text")
-                    )
-
-            # Extract usage
-            input_tokens = None
-            output_tokens = None
-            cached_tokens = None
-            if hasattr(response, "usage") and response.usage:
-                input_tokens = getattr(response.usage, "input_tokens", None)
-                output_tokens = getattr(response.usage, "output_tokens", None)
-                cached_tokens = getattr(response.usage, "cache_read_input_tokens", None)
-
-            usage = create_usage_record(
-                provider="anthropic",
-                model_id=model_id,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                cached_tokens=cached_tokens,
-                task_id=task_id,
-            )
-
-            return ModelResult(
-                provider="anthropic",
-                model_id=model_id,
-                parsed=parsed,
-                raw_text=raw_text,
-                usage=usage,
-            )
-        except Exception as exc:
-            if isinstance(exc, ProviderError):
-                raise
-            raise classify_error(exc, provider="anthropic", model_id=model_id) from exc
 
 
 class ImageContextPrompt(str):
@@ -286,7 +180,8 @@ class GoogleGenAIProvider(BaseProvider):
         try:
             client = self._get_client()
 
-            config_kwargs: dict[str, Any] = {"max_output_tokens": self.settings.max_output_tokens}
+            config_kwargs: dict[str, Any] = {"max_output_tokens": self.settings.max_output_tokens,
+                "http_options": types.HttpOptions(timeout=int((self.settings.specialist_timeout_seconds if model_id == self.settings.specialist.model_id else self.settings.request_timeout_seconds) * 1000), retry_options=types.HttpRetryOptions(attempts=1))}
             if model_id.startswith(("gemini-3", "gemini-4")):
                 config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=self.settings.thinking_level)
             if system_instruction:
@@ -310,7 +205,10 @@ class GoogleGenAIProvider(BaseProvider):
                 if hasattr(response, "parsed") and isinstance(response.parsed, schema):
                     parsed = response.parsed
                 elif response.text:
-                    parsed = schema.model_validate_json(response.text)
+                    try:
+                        parsed = schema.model_validate_json(response.text)
+                    except ValueError:
+                        pass  # Successful transport, invalid reasoning output; router handles quality escalation.
 
             input_tokens = None
             output_tokens = None

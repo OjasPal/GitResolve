@@ -12,7 +12,7 @@ def image_ready():
 
 
 @pytest.mark.skipif(not image_ready(), reason="Build the Streamlit testing image first")
-@pytest.mark.parametrize("mode", ["broken", "fixed", "helpers_only", "no_toggle", "raw_report", "shadow_plugin", "report_unexercised", "report_fixed", "report_raw", "answers_fixed", "answers_always", "answers_never", "answers_mixed_style"])
+@pytest.mark.parametrize("mode", ["broken", "fixed", "helpers_only", "no_toggle", "raw_report", "shadow_plugin", "report_unexercised", "report_fixed", "report_raw", "answers_fixed", "answers_always", "answers_never", "answers_mixed_style", "mocked_missing_export"])
 def test_ui_gate_checks_real_framework_rendering_and_interactions(tmp_path, mode):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -35,6 +35,11 @@ def test_ui_gate_checks_real_framework_rendering_and_interactions(tmp_path, mode
         "def test_interface():\n    app = AppTest.from_file('app.py').run()\n    assert not app.exception\n" +
         ("    app.checkbox[0].check().run()\n    assert not app.exception\n" if mode != "no_toggle" else ""))
     (repo / "test_ui.py").write_text(test)
+    if mode == "mocked_missing_export":
+        (repo / "utils.py").write_text("def existing_helper(): return []\n")
+        (repo / "app.py").write_text("from utils import generate_mcqs_docx\n" + app)
+        test = "import sys, types\nsys.modules['utils'] = types.SimpleNamespace(generate_mcqs_docx=lambda: b'docx')\n" + test
+        (repo / "test_ui.py").write_text(test)
     if mode in {"report_fixed", "report_raw"}:
         test = test.replace("app = AppTest.from_file('app.py').run()", "app = AppTest.from_file('app.py')\n    app.session_state['report'] = " + repr(REPORT_SAMPLE) + "\n    app.run()")
         (repo / "test_ui.py").write_text(test)

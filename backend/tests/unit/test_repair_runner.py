@@ -72,10 +72,12 @@ def run(tmp_path, results, review=None):
 def test_repair_requires_before_failure_and_after_success(tmp_path):
     outcome, ctx = run(tmp_path, [result(0, "1 passed"), result(1, "1 failed"), result(0, "2 passed")])
     assert outcome.outcome == "fix_ready"
+    assert outcome.final_diff == FIX
+    assert outcome.summary["linesAdded"] == 1 and outcome.summary["linesRemoved"] == 1
     assert outcome.verification == {"reproduced": True, "regressionPassed": True, "testsRun": 2, "newFailures": []}
     assert [call.get("patch", "") for call in ctx.commands] == ["", TEST, TEST + FIX]
-    assert ctx.commands[0]["command"] == ctx.commands[2]["command"] == ["python", "-m", "pytest", "-q"]
-    assert ctx.commands[1]["command"] == ["python", "-m", "pytest", "-q", "--", "test_math.py"]
+    assert ctx.commands[0]["command"] == ctx.commands[2]["command"] == ["python", "-m", "pytest", "-q", "--tb=short"]
+    assert ctx.commands[1]["command"] == ["python", "-m", "pytest", "-q", "--tb=short", "--", "test_math.py"]
 
 
 def test_passing_reproduction_cannot_be_claimed_as_a_fix(tmp_path):
@@ -128,10 +130,52 @@ def test_broken_baseline_stops_before_model_or_patch(tmp_path):
     assert len(ctx.commands) == 1
 
 
+def test_existing_missing_export_is_a_repair_target_not_infrastructure_failure(tmp_path):
+    outcome, ctx = run(tmp_path, [result(2, "ImportError: cannot import name 'generate_mcqs_docx' from 'utils'"),
+                                 result(1, "1 failed"), result(0, "2 passed")])
+    assert outcome.outcome == "fix_ready"
+    assert len(ctx.commands) == 3
+
+
 def test_changed_regression_is_rejected():
     proposal = RepairProposal(explanation="bad", reproduction_diff=TEST, final_diff=TEST.replace("== 3", "== 4") + FIX)
     with pytest.raises(ValueError, match="identical"):
         validate_proposal(proposal, LIMITS, "a" * 40)
+
+
+@pytest.mark.parametrize("fail_evaluation", [False, True])
+def test_technical_recovery_preserves_evidence_and_attempt_budget(tmp_path, monkeypatch, fail_evaluation):
+    from agent.config import RouterSettings
+    from agent.providers import BaseProvider, ModelResult, RetryableProviderError
+    from agent.router import ModelRouter
+    (tmp_path / "math_example.py").write_text("def add(a, b):\n    return a - b\n")
+    calls = []
+    class Provider(BaseProvider):
+        def generate(self, model_id, **kwargs):
+            calls.append(model_id)
+            if fail_evaluation and len(calls) == 1:
+                return ModelResult("google", model_id, parsed=RepairProposal(explanation="Fix addition", reproduction_diff=TEST, final_diff=TEST+FIX))
+            raise RetryableProviderError("deadline expired", "google", model_id, 504)
+    router = ModelRouter(RouterSettings(), provider_factory=lambda _:Provider())
+    monkeypatch.setattr("agent.router.get_router", lambda:router)
+    class RecordingContext(Context):
+        def __init__(self, *args):
+            super().__init__(*args); self.attempts=[]; self.artifacts={}
+        def usage(self, attempts_used=None, **kwargs):
+            if attempts_used is not None: self.attempts.append(attempts_used)
+            super().usage(attempts_used, **kwargs)
+        def event(self, kind, message, **kwargs): self.events.append(message)
+        def artifact(self, name, kind, content, *args): self.artifacts[name]=content
+    ctx=RecordingContext(tmp_path,[result(0,"1 passed"),result(1,"1 failed"),result(0,"2 passed")])
+    task=SimpleNamespace(base_sha="a"*40,task_id="tsk_test",limits=LIMITS,issue={"body":"Fix addition"},plan={})
+    outcome=run_repair(task,ctx)
+    assert outcome.failure_code==FailureCode.LLM_UNAVAILABLE and not outcome.final_diff
+    assert ctx.attempts==([1] if fail_evaluation else [])
+    assert ctx.budgets["modelCalls"]==1+len(calls)
+    assert "gemini-4-argon" not in calls
+    if fail_evaluation:
+        assert "Evaluation incomplete" in ctx.artifacts["final_tests"]
+        assert TEST+FIX==ctx.artifacts["attempt_001_diff"]
 
 
 def test_repository_context_excludes_secrets_and_hidden_files(tmp_path):

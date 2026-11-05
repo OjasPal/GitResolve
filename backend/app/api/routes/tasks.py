@@ -12,6 +12,7 @@ from app.schemas.resources import (
 )
 from app.schemas.tasks import (
     ApproveRequest,
+    GateChatRequest,
     CreateTaskRequest,
     TaskListResponse,
     TaskResponse,
@@ -65,6 +66,11 @@ def get_task(
     return TaskResponse.from_doc(service.get_task(user_id, task_id))
 
 
+@router.post("/{task_id}/conversation", response_model=TaskResponse, responses=ERRORS)
+def gate_conversation(body: GateChatRequest, task_id: str = TASK_ID, user_id: str = Depends(writer_user_id), service: TaskService = Depends(get_task_service)):
+    from app.services.gate_chat import converse
+    return TaskResponse.from_doc(converse(service, user_id, task_id, body))
+
 @router.post("/{task_id}/start", response_model=TaskResponse, responses=ERRORS)
 def start_task(
     task_id: str = TASK_ID,
@@ -96,7 +102,7 @@ def approve_task(
     service: TaskService = Depends(get_task_service),
 ) -> TaskResponse:
     """Human gate 2: approve the exact diff hash. Also retries PR creation after a PR-phase failure."""
-    return TaskResponse.from_doc(service.approve_task(user_id, task_id, body.diff_hash))
+    return TaskResponse.from_doc(service.approve_task(user_id, task_id, body.diff_hash, body.revision))
 
 
 @router.post("/{task_id}/reject", response_model=TaskResponse, responses=ERRORS)

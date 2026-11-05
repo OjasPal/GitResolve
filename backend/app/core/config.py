@@ -63,9 +63,9 @@ class Settings(BaseSettings):
 
     # --- Quotas and task limits (TRD sections 4 and 5) ----------------------
     max_tasks_per_day: int = 10
-    max_repair_attempts: int = 3
-    max_model_calls: int = 25
-    task_timeout_seconds: int = 20 * 60
+    max_repair_attempts: int = Field(default=6, ge=1, le=12)
+    max_model_calls: int = 50
+    task_timeout_seconds: int = 30 * 60
     execution_timeout_seconds: int = 300
     max_diff_files: int = 5
     max_diff_lines: int = 150

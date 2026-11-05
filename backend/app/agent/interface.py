@@ -28,6 +28,7 @@ class AgentTask:
     issue: dict[str, Any]  # number, title, url, body, labels, comments
     plan: dict[str, Any] | None
     limits: dict[str, Any]
+    attempts_used: int = 0
 
 
 @dataclass

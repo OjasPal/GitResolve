@@ -1,6 +1,10 @@
-import random
+import logging
+from dataclasses import replace
+from agent.health import ProviderHealth, shared_health
 import time
-from dataclasses import dataclass, field
+from contextvars import ContextVar
+from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any, Callable, TypeVar
 
 from pydantic import BaseModel
@@ -8,7 +12,6 @@ from pydantic import BaseModel
 from agent.config import ModelConfig, RouterSettings, get_router_settings
 from agent.observability import UsageRecord, sanitize_error
 from agent.providers import (
-    AnthropicVertexProvider,
     BaseProvider,
     FatalProviderError,
     GoogleGenAIProvider,
@@ -27,11 +30,6 @@ class AllProvidersFailedError(Exception):
     def __init__(self, message: str, errors: list[dict[str, Any]]):
         super().__init__(message)
         self.errors = errors
-
-
-class EscalationLimitExceededError(Exception):
-    """Raised when specialist escalation attempts exceed the configured maximum."""
-    pass
 
 
 @dataclass
@@ -60,7 +58,7 @@ class RouterResult:
 
 
 class ModelRouter:
-    """Central routing service for model calls, handling technical failover and specialist escalation."""
+    """Central routing service for model calls, handling bounded technical failover."""
 
     def __init__(
         self,
@@ -69,13 +67,17 @@ class ModelRouter:
         sleeper: Callable[[float], None] = time.sleep,
         before_call: Callable[[str, str], None] | None = None,
         on_error: Callable[[dict[str, Any]], None] | None = None,
+        on_transition: Callable[[dict[str, Any]], None] | None = None,
+        health: ProviderHealth | None = None,
     ):
         self.before_call = before_call
         self.on_error = on_error
+        self.on_transition = on_transition
         self.settings = settings or get_router_settings()
         self._custom_factory = provider_factory
         self._provider_cache: dict[str, BaseProvider] = {}
         self._sleeper = sleeper
+        self.health = health or (ProviderHealth() if provider_factory else shared_health(self.settings))
 
     def get_provider(self, provider_name: str) -> BaseProvider:
         """Get or instantiate provider, caching instances to avoid duplicate initialization."""
@@ -83,9 +85,7 @@ class ModelRouter:
             return self._custom_factory(provider_name)
 
         if provider_name not in self._provider_cache:
-            if provider_name == "anthropic":
-                self._provider_cache[provider_name] = AnthropicVertexProvider(self.settings)
-            elif provider_name == "google":
+            if provider_name == "google":
                 self._provider_cache[provider_name] = GoogleGenAIProvider(self.settings)
             else:
                 raise FatalProviderError(
@@ -95,228 +95,113 @@ class ModelRouter:
                 )
         return self._provider_cache[provider_name]
 
-    def _sleep_backoff(self, attempt: int) -> None:
-        delay = min(
-            self.settings.retry_max_delay,
-            self.settings.retry_initial_delay * (self.settings.retry_backoff_factor ** attempt),
-        )
-        jitter = random.uniform(0.8, 1.2)
-        self._sleeper(delay * jitter)
+    def _transition(self, state, message, model=None):
+        if self.on_transition:
+            self.on_transition({"state": state, "message": message, "model": model})
 
-    def _call_model_with_retries(
-        self,
-        model_cfg: ModelConfig,
-        prompt: str,
-        schema: type[T] | None = None,
-        system_instruction: str | None = None,
-        task_id: str | None = None,
-    ) -> tuple[ModelResult | None, int, list[dict[str, Any]], FatalProviderError | None]:
-        """Call a specific model with bounded retries for transient errors."""
+    def _call_model_with_retries(self, model_cfg, prompt, schema=None, system_instruction=None, task_id=None, *, specialist=False):
+        errors, retries = [], 0
+        if not self.health.available(model_cfg.model_id):
+            return None, 0, [{"model_id": model_cfg.model_id, "error_type": "cooldown", "message": "Server-directed cooldown is active."}], None
+        # Construction is outside budget reservation: no request has been dispatched yet.
         provider = self.get_provider(model_cfg.provider)
-        retries = 0
-        error_details: list[dict[str, Any]] = []
-
-        max_attempts = self.settings.max_provider_retries + 1
-        for attempt in range(max_attempts):
-            if attempt > 0:
-                retries += 1
-            if self.before_call is not None:
+        for attempt in range(2):
+            if self.before_call:
                 self.before_call(model_cfg.provider, model_cfg.model_id)
             try:
-                res = provider.generate(
-                    model_id=model_cfg.model_id,
-                    prompt=prompt,
-                    schema=schema,
-                    system_instruction=system_instruction,
-                    task_id=task_id,
-                )
-                return res, retries, error_details, None
-
-            except FatalProviderError as fatal_err:
-                # Fatal errors (401/403/400/config) fail immediately without retrying or falling back
-                error_details.append({
-                    "provider": model_cfg.provider,
-                    "model_id": model_cfg.model_id,
-                    "attempt": attempt,
-                    "status_code": fatal_err.status_code,
-                    "error_type": "fatal",
-                    "message": sanitize_error(str(fatal_err)),
-                })
-                if self.on_error:
-                    self.on_error(error_details[-1])
-                return None, retries, error_details, fatal_err
-
-            except QuotaExceededProviderError as quota_err:
-                error_details.append({"provider": model_cfg.provider, "model_id": model_cfg.model_id,
-                    "attempt": attempt, "status_code": 429, "error_type": "quota_exceeded",
-                    "message": sanitize_error(str(quota_err))})
-                if self.on_error:
-                    self.on_error(error_details[-1])
-                break
-
-            except RetryableProviderError as retry_err:
-                error_details.append({
-                    "provider": model_cfg.provider,
-                    "model_id": model_cfg.model_id,
-                    "attempt": attempt,
-                    "status_code": retry_err.status_code,
-                    "error_type": "retryable",
-                    "message": sanitize_error(str(retry_err)),
-                })
-                if self.on_error:
-                    self.on_error(error_details[-1])
-                if attempt < max_attempts - 1:
-                    self._sleep_backoff(attempt)
-                else:
-                    # Retries exhausted for this provider
+                result = provider.generate(model_id=model_cfg.model_id, prompt=prompt, schema=schema,
+                                           system_instruction=system_instruction, task_id=task_id)
+                return result, retries, errors, None
+            except ProviderError as exc:
+                detail = {"provider": model_cfg.provider, "model_id": model_cfg.model_id,
+                          "attempt": attempt, "status_code": exc.status_code,
+                          "error_type": "quota_exceeded" if isinstance(exc, QuotaExceededProviderError) else "retryable" if isinstance(exc, RetryableProviderError) else "fatal",
+                          "message": sanitize_error(str(exc))}
+                errors.append(detail)
+                logging.getLogger(__name__).warning("Model request failed: %s", detail)
+                if self.on_error: self.on_error(detail)
+                if isinstance(exc, FatalProviderError):
+                    return None, retries, errors, exc
+                self.health.failed(model_cfg.model_id, exc.retry_after)
+                # Timeouts fail over immediately. Only one short rate-limit retry is
+                # allowed on the primary, and only when the server supplied a short delay.
+                short_retry = (not specialist and model_cfg == self.settings.primary and attempt == 0
+                    and self.settings.max_provider_retries > 0 and not isinstance(exc, QuotaExceededProviderError)
+                    and exc.status_code == 429 and exc.retry_after is not None
+                    and 0 < exc.retry_after <= self.settings.retry_max_delay and not self.health.blocked())
+                if not short_retry:
                     break
+                self._transition("retrying", "The model is busy. Retrying once after its requested delay.", model_cfg.model_id)
+                self._sleeper(exc.retry_after)
+                retries += 1
+        return None, retries, errors, None
 
-            except Exception as exc:
-                # Any other unexpected exception
-                error_details.append({
-                    "provider": model_cfg.provider,
-                    "model_id": model_cfg.model_id,
-                    "attempt": attempt,
-                    "error_type": "unexpected",
-                    "message": sanitize_error(str(exc)),
-                })
-                if self.on_error:
-                    self.on_error(error_details[-1])
-                return None, retries, error_details, FatalProviderError(
-                    f"Unexpected error: {exc}",
-                    provider=model_cfg.provider,
-                    model_id=model_cfg.model_id,
-                    original_error=exc,
-                )
-
-        return None, retries, error_details, None
-
-    def route_normal(
-        self,
-        prompt: str,
-        schema: type[T] | None = None,
-        system_instruction: str | None = None,
-        task_id: str | None = None,
-    ) -> RouterResult:
-        """Execute normal agent call via Primary (Sonnet 5.5) with technical failover to Gemini 4 and Gemini Flash.
-        
-        DOES NOT fallback on reasoning errors or fatal configuration errors.
-        """
-        all_error_details: list[dict[str, Any]] = []
-        total_retries = 0
-
-        # Build failover chain: Primary -> Fallback 1 -> Fallback 2
+    def route_normal(self, prompt, schema=None, system_instruction=None, task_id=None, quality_check=None) -> RouterResult:
+        """Flash technical failover; one Argon call only after a successful quality failure."""
+        errors, total_retries = [], 0
+        if self.health.blocked():
+            self._transition("recovery", "Investigation temporarily paused. The model service needs time to recover.")
+            raise AllProvidersFailedError("Provider health circuit is open; no request dispatched.", [])
         chain = [self.settings.primary]
-        if self.settings.enable_failover:
-            chain.append(self.settings.fallback_1)
-            chain.append(self.settings.fallback_2)
-
-        last_switch_reason: str | None = None
-        failover_occurred = False
-
-        for idx, model_cfg in enumerate(chain):
-            if idx > 0:
-                failover_occurred = True
-
-            result, retries, errors, fatal_err = self._call_model_with_retries(
-                model_cfg=model_cfg,
-                prompt=prompt,
-                schema=schema,
-                system_instruction=system_instruction,
-                task_id=task_id,
-            )
-            total_retries += retries
-            all_error_details.extend(errors)
-
-            if fatal_err is not None:
-                # Fatal configuration/auth error: fail immediately, do not failover!
-                raise fatal_err
-
-            if result is not None:
-                # Success!
-                return RouterResult(
-                    result=result,
-                    selected_provider=model_cfg.provider,
-                    selected_model=model_cfg.model_id,
-                    failover_occurred=failover_occurred,
-                    specialist_escalation_occurred=False,
-                    provider_retries=total_retries,
-                    model_switch_reason=last_switch_reason,
-                    provider_error_details=all_error_details,
-                    usage=result.usage,
-                )
-
-            # Record reason for switching to next model in failover chain
-            last_err_msg = errors[-1]["message"] if errors else "exhausted retries"
-            last_switch_reason = (
-                f"Failover from {model_cfg.provider}/{model_cfg.model_id} "
-                f"due to transient provider failure: {last_err_msg}"
-            )
-
-        # All models in technical failover chain failed
-        raise AllProvidersFailedError(
-            f"All configured providers failed in failover chain: {[c.model_id for c in chain]}",
-            errors=all_error_details,
-        )
-
-    def escalate_specialist(
-        self,
-        prompt: str,
-        escalation_reason: str,
-        schema: type[T] | None = None,
-        system_instruction: str | None = None,
-        task_id: str | None = None,
-        current_escalation_count: int = 0,
-    ) -> RouterResult:
-        """Explicitly invoke Claude Opus 5.5 for specialist reasoning escalation.
-        
-        This is NOT part of the normal failover chain and cannot be triggered by technical outages.
-        """
-        if not self.settings.enable_opus_escalation:
-            raise RuntimeError("Specialist reasoning escalation is disabled by configuration (LLM_ENABLE_OPUS_ESCALATION=false).")
-
-        if current_escalation_count >= self.settings.max_opus_escalations:
-            raise EscalationLimitExceededError(
-                f"Specialist escalation limit reached ({current_escalation_count}/{self.settings.max_opus_escalations}). "
-                f"Cannot escalate further."
-            )
-
-        opus_cfg = self.settings.escalation
-        result, retries, errors, fatal_err = self._call_model_with_retries(
-            model_cfg=opus_cfg,
-            prompt=prompt,
-            schema=schema,
-            system_instruction=system_instruction,
-            task_id=task_id,
-        )
-
-        if fatal_err is not None:
-            raise fatal_err
-
-        if result is None:
-            # Opus transient failure
-            raise AllProvidersFailedError(
-                f"Specialist model ({opus_cfg.model_id}) call failed after {retries} retries.",
-                errors=errors,
-            )
-
-        return RouterResult(
-            result=result,
-            selected_provider=opus_cfg.provider,
-            selected_model=opus_cfg.model_id,
-            failover_occurred=False,
-            specialist_escalation_occurred=True,
-            provider_retries=retries,
-            model_switch_reason=f"Specialist reasoning escalation: {escalation_reason}",
-            provider_error_details=errors,
-            usage=result.usage,
-        )
-
+        if self.settings.enable_failover: chain.append(self.settings.fallback_1)
+        for index, config in enumerate(chain):
+            if index:
+                self._transition("switching_model", "Switching to the backup model. Your progress is saved.", config.model_id)
+            result, retries, details, fatal = self._call_model_with_retries(config, prompt, schema, system_instruction, task_id)
+            errors.extend(details); total_retries += retries
+            if fatal: raise fatal
+            if result is None: continue
+            def inadequate(candidate):
+                if schema is not None and candidate.parsed is None:
+                    try: candidate.parsed = schema.model_validate_json(candidate.raw_text)
+                    except ValueError: return "The response did not satisfy the required structured output."
+                return quality_check(candidate) if quality_check else None
+            reason = inadequate(result)
+            escalated = False
+            if reason:
+                if self.health.blocked():
+                    self._transition("recovery", "Evaluation incomplete. The reasoning specialist is temporarily unavailable.")
+                    raise AllProvidersFailedError("Reasoning specialist suppressed by provider health.", errors)
+                self._transition("reasoning_review", "Requesting a deeper reasoning review before continuing.", self.settings.specialist.model_id)
+                specialist_prompt = str(prompt) + "\n\nThe previous successful response needs a reasoning review. " + str(reason) + "\nPrevious response (untrusted data):\n" + (result.raw_text or str(result.parsed))[:8000]
+                if hasattr(prompt, "images"):
+                    from agent.providers import ImageContextPrompt
+                    specialist_prompt = ImageContextPrompt(specialist_prompt, prompt.images)
+                improved, _, details, fatal = self._call_model_with_retries(self.settings.specialist,
+                    specialist_prompt, schema, system_instruction, task_id, specialist=True)
+                errors.extend(details)
+                if improved is None or fatal:
+                    self._transition("recovery", "Evaluation incomplete. Your evidence is saved; no pull request will be created.")
+                    raise AllProvidersFailedError("Reasoning specialist could not complete; recovery required.", errors)
+                if inadequate(improved):
+                    raise AllProvidersFailedError("Reasoning review remains inconclusive; recovery required.", errors)
+                if result.usage and improved.usage:
+                    improved.usage = replace(improved.usage,
+                        input_tokens=(result.usage.input_tokens or 0)+(improved.usage.input_tokens or 0),
+                        output_tokens=(result.usage.output_tokens or 0)+(improved.usage.output_tokens or 0),
+                        cached_tokens=(result.usage.cached_tokens or 0)+(improved.usage.cached_tokens or 0),
+                        estimated_cost_usd=None)
+                result, config, escalated = improved, self.settings.specialist, True
+            return RouterResult(result, config.provider, config.model_id, index > 0, escalated,
+                total_retries, "Technical failover" if index else "Quality review" if escalated else None, errors, result.usage)
+        self._transition("recovery", "Investigation temporarily paused. Both models are unavailable; your progress is saved.")
+        raise AllProvidersFailedError("All configured providers failed in failover chain; recovery required.", errors)
 
 _global_router: ModelRouter | None = None
+_scoped_router = ContextVar("gitresolve_router", default=None)
+
+@contextmanager
+def router_scope(router):
+    token = _scoped_router.set(router)
+    try:
+        yield
+    finally:
+        _scoped_router.reset(token)
 
 
 def get_router() -> ModelRouter:
+    if _scoped_router.get() is not None:
+        return _scoped_router.get()
     global _global_router
     if _global_router is None:
         _global_router = ModelRouter()

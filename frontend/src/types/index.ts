@@ -90,6 +90,7 @@ export type ArtifactType =
   | "pr_result";
 
 export interface PlanData {
+  title?: string;
   problemSummary: string;
   steps: string[];
   likelyFiles: string[];
@@ -161,6 +162,9 @@ export interface PullRequestView {
 }
 
 export interface TaskResponse {
+  gateMessages?: {role:"user"|"assistant";content:string;gate:string}[];
+  gateRevision?: number;
+  gateChatBusy?: boolean;
   id: string;
   status: TaskStatus;
   stage: TaskStage;

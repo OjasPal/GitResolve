@@ -167,7 +167,7 @@ class TaskService:
         if existing["userId"] != user_id:
             raise not_found()
         if (existing.get("attachmentIds", []) != (attachment_ids or []) or existing["repoId"] != repo_id or existing["issue"]["number"] != issue_number
-                or (issue_number is None and existing["issue"].get("body") != prompt)):
+                or (issue_number is None and existing.get("originalPrompt", existing["issue"].get("body")) != prompt)):
             raise ApiError(
                 409,
                 "idempotency_key_reuse",
@@ -209,7 +209,7 @@ class TaskService:
         if prompt:
             # A direct report is task-local; no GitHub issue is created.
             issue_doc = {
-                "number": None, "title": prompt.splitlines()[0][:200], "url": None,
+                "number": None, "title": "Analyzing your request", "url": None,
                 "body": prompt, "bodyTruncated": False, "labels": [], "comments": [],
             }
         else:
@@ -336,6 +336,8 @@ class TaskService:
 
         def fn(txn: Txn) -> Doc:
             ctx = read_ctx(txn, task_id, owner=user_id, now=now)
+            if ctx.task.get("gateChatBusy") and ctx.task.get("gateChatUntil", now) > now:
+                raise invalid_state("Wait for the review conversation to finish before approving.")
             if ctx.task["status"] != TaskStatus.AWAITING_START:
                 raise invalid_state("Only a task awaiting start can be started.")
             return apply_change(
@@ -387,17 +389,21 @@ class TaskService:
 
         return self.store.run_transaction(fn)
 
-    def approve_task(self, user_id: str, task_id: str, diff_hash: str) -> Doc:
+    def approve_task(self, user_id: str, task_id: str, diff_hash: str, revision: int = 0) -> Doc:
         now = self.clock()
 
         def fn(txn: Txn) -> Doc:
             ctx = read_ctx(txn, task_id, owner=user_id, now=now)
+            if ctx.task.get("gateChatBusy") and ctx.task.get("gateChatUntil", now) > now:
+                raise invalid_state("Wait for the review conversation to finish before approving.")
             task = ctx.task
             status = TaskStatus(task["status"])
             phase = (task.get("failure") or {}).get("phase")
             retry = status in PR_RETRY_STATUSES and phase == DispatchPhase.PR.value
             if status != TaskStatus.AWAITING_APPROVAL and not retry:
                 raise invalid_state("This task is not awaiting approval.")
+            if revision != task.get("gateRevision", 0):
+                raise ApiError(409, "stale_review", "The review changed. Review the updated fix before approving.")
             stored = task.get("finalDiffHash")
             if not stored or diff_hash != stored:
                 raise ApiError(

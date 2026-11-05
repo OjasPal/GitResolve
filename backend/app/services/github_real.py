@@ -6,6 +6,7 @@ import requests
 
 from githubapp.auth import GitHubAuth
 from githubapp.client import GitHubClient, GitHubClientError
+from githubapp.identity import resolve_bot_identity
 from app.services.github import GitHubUnavailable, GitHubIdentity, RepositoryInfo, IssueInfo
 
 
@@ -16,6 +17,7 @@ class RealGitHubGateway:
         if not key and settings.github_app_private_key_path:
             key = Path(settings.github_app_private_key_path).read_text(encoding="utf-8")
         self.auth = auth or GitHubAuth(str(settings.github_app_id or ""), key or "")
+        self._bot_identity = None
 
     def _client(self, installation, repo=None, write=False):
         permissions = {"metadata": "read"}
@@ -63,6 +65,16 @@ class RealGitHubGateway:
             if permission.get("permission") not in {"write", "maintain", "admin"}:
                 raise GitHubClientError("access_revoked")
         return repo, client
+
+    def verified_bot_identity(self, client):
+        """GitResolve Agent bot identity, verified against GitHub once and cached.
+
+        Raises GitHubClientError on any mismatch; there is no fallback identity.
+        """
+        if self._bot_identity is None:
+            self._bot_identity = resolve_bot_identity(
+                self.auth.app_client(), client, self.auth.app_id)
+        return self._bot_identity
 
     @staticmethod
     def _issue(data, comments=None):

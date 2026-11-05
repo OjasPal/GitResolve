@@ -10,22 +10,28 @@ import { AlertTriangle, GitPullRequest, Loader2, Play, RefreshCw, XCircle } from
 
 interface ActionButtonsProps {
   task: TaskResponse;
+  diffText?: string;
+  planEditing?: boolean;
   reviewedDiffHash: string | null;
   onReviewDiff: () => void;
   onActionSuccess: (updatedTask: TaskResponse) => void;
 }
 
-export function ActionButtons({ task, reviewedDiffHash, onReviewDiff, onActionSuccess }: ActionButtonsProps) {
+export function ActionButtons({ task, diffText, planEditing = false, reviewedDiffHash, onReviewDiff, onActionSuccess }: ActionButtonsProps) {
   const router = useRouter();
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const diffLines = diffText?.split("\n");
+  const added = diffLines?.filter(line => line.startsWith("+") && !line.startsWith("+++")).length;
+  const removed = diffLines?.filter(line => line.startsWith("-") && !line.startsWith("---")).length;
   const actions = task.availableActions || [];
-  const canApprove = Boolean(task.finalDiffHash && reviewedDiffHash === task.finalDiffHash);
+  const canApprove = !planEditing && Boolean(task.finalDiffHash && reviewedDiffHash === task.finalDiffHash);
   const needsDiffReview = (actions.includes("approve") || actions.includes("retry_pr")) && !canApprove;
 
   const handleStart = async () => {
+    if (planEditing) return;
     try {
       setLoadingAction("start");
       setError(null);
@@ -46,7 +52,7 @@ export function ActionButtons({ task, reviewedDiffHash, onReviewDiff, onActionSu
     try {
       setLoadingAction("approve");
       setError(null);
-      const updated = await approveTask(task.id, task.finalDiffHash);
+      const updated = await approveTask(task.id, task.finalDiffHash, task.gateRevision || 0);
       onActionSuccess(updated);
       setApprovalOpen(false);
       toast.success("Approved. Creating your draft pull request.");
@@ -93,6 +99,10 @@ export function ActionButtons({ task, reviewedDiffHash, onReviewDiff, onActionSu
     router.push(`/tasks/new?repo=${encodeURIComponent(task.repoId)}`);
   };
 
+  if (task.status === "completed") {
+    return task.pr?.url ? <a href={task.pr.url} target="_blank" rel="noopener noreferrer" className="button primary"><GitPullRequest className="w-4 h-4"/>View Pull Request</a> : null;
+  }
+
   if (actions.length === 0) {
     if (task.status === "creating_pr") {
       return (
@@ -124,13 +134,14 @@ export function ActionButtons({ task, reviewedDiffHash, onReviewDiff, onActionSu
         </div>
       )}
 
-      <Dialog.Root open={approvalOpen} onOpenChange={setApprovalOpen}><Dialog.Portal><Dialog.Overlay className="modal-scrim"/><Dialog.Content className="approval-modal" data-lenis-prevent><Dialog.Title>Publish this exact fix?</Dialog.Title><Dialog.Description>Approve the reviewed patch and its recorded evidence. GitResolve will create a branch and a draft pull request. It will never merge it.</Dialog.Description><div className="approval-facts"><div><strong>{task.finalDiffSummary?.filesChanged ?? "—"}</strong>files changed</div><div><strong>+{task.finalDiffSummary?.linesAdded ?? "—"}</strong>lines added</div><div><strong>−{task.finalDiffSummary?.linesRemoved ?? "—"}</strong>lines removed</div></div><p><strong>{task.finalDiffSummary?.commitMessage || "Reviewed repair"}</strong></p><p>Repository: {task.repoFullName}. A unique gitresolve-agent branch is reserved at publication. Test evidence is available in the Tests tab; UI design still needs your visual review.</p><code>{task.finalDiffHash}</code>{error && <p className="inline-error" role="alert">{error}</p>}<div className="actions"><Dialog.Close className="button" disabled={!!loadingAction}>Keep reviewing</Dialog.Close><button className="button primary" onClick={handleApprove} disabled={!!loadingAction || !canApprove}>{loadingAction ? "Creating…" : "Approve & create draft PR"}</button></div></Dialog.Content></Dialog.Portal></Dialog.Root>
+      <Dialog.Root open={approvalOpen} onOpenChange={setApprovalOpen}><Dialog.Portal><Dialog.Overlay className="modal-scrim"/><Dialog.Content className="approval-modal" data-lenis-prevent><Dialog.Title>Publish this exact fix?</Dialog.Title><Dialog.Description>Approve the reviewed patch and its recorded evidence. GitResolve will create a branch and a draft pull request. It will never merge it.</Dialog.Description><div className="approval-facts"><div><strong>{task.finalDiffSummary?.filesChanged ?? "—"}</strong>files changed</div><div><strong>+{added ?? task.finalDiffSummary?.linesAdded ?? "—"}</strong>lines added</div><div><strong>−{removed ?? task.finalDiffSummary?.linesRemoved ?? "—"}</strong>lines removed</div></div><p><strong>{task.finalDiffSummary?.commitMessage || "Reviewed repair"}</strong></p><p>Repository: {task.repoFullName}. A unique gitresolve-agent branch is reserved at publication. Test evidence is available in the Tests tab; UI design still needs your visual review.</p><code>{task.finalDiffHash}</code>{error && <p className="inline-error" role="alert">{error}</p>}<div className="actions"><Dialog.Close className="button" disabled={!!loadingAction}>Keep reviewing</Dialog.Close><button className="button primary" onClick={handleApprove} disabled={!!loadingAction || !canApprove}>{loadingAction ? "Creating…" : "Approve & create draft PR"}</button></div></Dialog.Content></Dialog.Portal></Dialog.Root>
       <div className="flex flex-wrap items-center gap-2.5">
         {/* Gate 1: Start Repair Action */}
         {actions.includes("start") && (
           <button
             onClick={handleStart}
-            disabled={!!loadingAction}
+            disabled={!!loadingAction || planEditing}
+            title={planEditing ? "Finish your conversation or close the request editor before starting repair" : undefined}
             className="button primary"
           >
             {loadingAction === "start" ? (
@@ -208,7 +219,7 @@ export function ActionButtons({ task, reviewedDiffHash, onReviewDiff, onActionSu
         )}
 
         {/* Run Again Action */}
-        {actions.includes("run_again") && (
+        {actions.includes("run_again") && (task.status.startsWith("failed_") || task.status === "timed_out" || task.status === "worker_lost") && (
           <button
             onClick={handleRunAgain}
             className="button"

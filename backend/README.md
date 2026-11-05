@@ -1,6 +1,14 @@
-# Backend foundation
+## One root Python environment
 
-Use Python 3.12. From backend: `uv pip install -e '.[dev,agent,firestore]'`.
+From the GitResolve root run `uv sync --group dev`. Do not create a backend/.venv.
+Start the backend and its embedded local worker from the root:
+
+```powershell
+uv run python -m uvicorn app.main:app --app-dir backend --reload --host 127.0.0.1 --port 8000
+```
+
+The root `.env` configures model routing; `backend/.env` still configures the API.
+
 
 ## Frontend-free local prototype
 
@@ -64,7 +72,7 @@ Settings always load `backend/.env`, regardless of the shell's working directory
 With local real GitHub mode and the memory store, the API starts its worker in
 process so tasks share the same store. Set `AGENT_MODE=langgraph`. The agent's
 model settings load from the project-root `.env`; process environment wins.
-Install the backend `agent` extra, which includes Anthropic Vertex support.
+The root dependencies include the Google model SDK; use the single root environment.
 `/health` reports API liveness plus local worker state and configured agent mode.
 A healthy API alone does not imply a running worker. Separate worker processes
 require Firestore, since memory is not shared. For a single local API process,

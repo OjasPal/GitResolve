@@ -236,3 +236,4 @@ secrets/
 .diagnostics/
 
 .agents/
+backend/uv.lock
