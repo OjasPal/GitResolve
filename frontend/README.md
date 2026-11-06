@@ -28,14 +28,15 @@ enable providers or authorize a domain.
 ## Authentication and GitHub connection
 
 Firebase handles Google/email sign-in, sign-up, password reset and persistence.
-After sign-in, every protected screen requires GitHub authorization and at least
-one accessible repository. The connection screen appears before dashboard data
-or repair screens mount. No development/demo login is exposed.
+After sign-in, protected screens require a GitHub session. Identity is checked
+in the background; repository discovery no longer blocks page navigation.
+Repository-dependent screens show loading, empty and error states independently.
+No development/demo login is exposed.
 
 The backend accepts its own GitHub session JWT, not Firebase ID tokens. The UI
 therefore uses the existing `/auth/github/login` redirect and `/auth/callback`
-fragment callback to establish a separate GitHub session, then checks `/me` and
-`/repositories`. Firebase tokens are never sent to the backend. The browser
+fragment callback to establish a separate GitHub session, then checks `/me`.
+Repository screens load `/repositories` independently. Firebase tokens are never sent to the backend. The browser
 session is associated with the current Firebase UID locally; this is not a
 server-side Firebase/GitHub account-linking feature. Backend ownership and access
 checks remain authoritative under the GitHub identity. Server-side Firebase
@@ -49,6 +50,24 @@ origin and a secure session JWT secret. The GitHub App callback is
 then authorize GitHub. Reauthorize after installation/permission changes because
 the backend refreshes installation membership during OAuth. Expired sessions
 return users to connection onboarding without logging out of Firebase.
+
+## Teammate performance
+
+Use `npm run build` followed by `npm run start` for a shared preview. Keep the
+existing tunnel pointed at the chosen frontend/backend ports. Build-time public
+URLs must match that preview; changing `.env.local` requires another build.
+Do not run `next dev` and `next start` as interchangeable performance baselines:
+development compiles routes on first access. Measured warm production HTML
+responses were faster than development; browser/hydration latency remains
+unverified (see `docs/speed-validation.md` at the repository root).
+
+The existing TanStack Query cache now deduplicates repository requests, serves
+cached data immediately and revalidates after 15 seconds. It is memory-only and
+clears on GitHub session changes; tokens are never query keys. Lists expose
+explicit Load more controls. Next Link prefetch and lazy Shiki loading already
+existed and remain in use. No new runtime dependency was added.
+
+Checks: `node --test tests/speed.test.mjs`, `npm run lint`, `npm run build`.
 
 ## Supported flows
 

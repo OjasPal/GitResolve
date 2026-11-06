@@ -78,6 +78,7 @@ class ExecutionRequest(BaseModel):
 
 
 class ExecutionResult(BaseModel):
+    baseline_cache_hit: bool = False
     execution_id: str
     status: Literal["passed", "failed", "timed_out", "error"]
     exit_code: int | None = None

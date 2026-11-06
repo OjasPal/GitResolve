@@ -20,6 +20,9 @@ GitResolve investigates Python repository issues, proposes verified repairs, and
 - `backend/app/worker/`: execution orchestration and sandbox bridge; `backend/app/services/`: lifecycle, approval, storage, and GitHub boundary.
 - `sandbox/`: static profiling, wheel preparation, hardened execution, and framework gates. Read its README before changing execution.
 - `githubapp/`: GitHub authentication/client; `frontend/`: app UI.
+- Speed services: `githubapp/cache.py` and `timing.py`; scoped display caches in `github_real.py`; immutable environment leases in `sandbox/environment.py`; original-only results in `sandbox/baseline_cache.py`; bounded plan-review speculation in `backend/app/worker/prewarm.py`.
+- Never pass baseline cache scope for patched verification. Cached baseline evidence cannot authorize publication. Prepared environments may be reused read-only; execution containers may not.
+- `docs/prompts/AL.md` and `PHASE-2A.md` preserve the prompts; the kickoff amendments and STOP A control sequence. `ADAPTIVE_LANES` and `AGENT_ENGINE` are planned, not implemented at the speed checkpoint. Future lane/graph work must reuse the speed services.
 
 ## Validation
 From the repository root in PowerShell:

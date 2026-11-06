@@ -2,6 +2,7 @@
 
 from typing import Any
 import logging
+import time
 
 from app.services.github import WorkerGitHubGateway
 from app.schemas.enums import ArtifactType, EventLevel, EventType, TaskStage
@@ -11,6 +12,16 @@ from app.services.worker_service import WorkerService, CancelRequested
 
 class JobContext:
     def __init__(self, service: WorkerService, task_id: str, worker_id: str, github: WorkerGitHubGateway | None = None):
+        self._timing_start = time.perf_counter()
+        self._stage_start = self._timing_start
+        self._timing_stage = "intake"
+        self._first_model = False
+        self._docker_runs = 0
+        self._stage_docker_runs = 0
+        self._stage_model_calls = 0
+        self._stage_input_tokens = 0
+        self._stage_output_tokens = 0
+        self._stage_usage_complete = True
         self.stopped = None
         self.github = github
         self._svc = service
@@ -28,7 +39,38 @@ class JobContext:
     def stage(self, stage: TaskStage, **fields: Any) -> None:
         """Enter a stage. Optional fields: baseSha, testCommand, baseline, reproduction."""
         self.checkpoint()
+        self.flush_timing()
+        self._timing_stage = stage.value
         self._svc.update_progress(self.task_id, self.worker_id, stage=stage, fields=fields or None)
+
+    def flush_timing(self) -> None:
+        now = time.perf_counter()
+        logging.getLogger("gitresolve.performance").info("stage timing", extra={
+            "task_id": self.task_id, "stage": self._timing_stage,
+            "duration_ms": round((now - self._stage_start) * 1000, 3), "docker_runs": self._stage_docker_runs,
+            "total_docker_runs": self._docker_runs, "model_calls": self._stage_model_calls,
+            "input_tokens": self._stage_input_tokens, "output_tokens": self._stage_output_tokens,
+            "usage_complete": self._stage_usage_complete})
+        self._stage_start = now
+        self._stage_docker_runs = self._stage_model_calls = 0
+        self._stage_input_tokens = self._stage_output_tokens = 0
+        self._stage_usage_complete = True
+
+    def observe_timing(self, record) -> None:
+        if record['operation'] == 'docker.run':
+            self._docker_runs += 1
+            self._stage_docker_runs += 1
+        if record['operation'] == 'model.generate':
+            self._stage_model_calls += 1
+            self._stage_input_tokens += record.get('input_tokens') or 0
+            self._stage_output_tokens += record.get('output_tokens') or 0
+            self._stage_usage_complete &= record.get('input_tokens') is not None and record.get('output_tokens') is not None
+
+    def model_dispatched(self) -> None:
+        if not self._first_model:
+            self._first_model = True
+            logging.getLogger("gitresolve.performance").info("first model dispatch", extra={
+                "task_id": self.task_id, "duration_ms": round((time.perf_counter() - self._timing_start) * 1000, 3)})
 
     def event(
         self, type_: EventType, message: str, level: EventLevel = EventLevel.INFO,
@@ -82,7 +124,13 @@ class JobContext:
 
     def execute(self, *, commit_sha: str, command: list[str], patch: str = ""):
         from app.worker.sandbox import execute
-        return execute(self, commit_sha=commit_sha, command=command, patch=patch)
+        from githubapp.timing import measure
+        with measure("sandbox.execute", task_id=self.task_id):
+            return execute(self, commit_sha=commit_sha, command=command, patch=patch)
+
+    def baseline(self, *, commit_sha: str, command: list[str]):
+        from app.worker.sandbox import execute
+        return execute(self, commit_sha=commit_sha, command=command, baseline=True)
 
 
 __all__ = ["CancelRequested", "JobContext", "LeaseLost"]

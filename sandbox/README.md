@@ -112,7 +112,12 @@ Preparation has two phases:
    output volume, not repository code or host secrets. The test container mounts
    this environment read-only at `/opt/prepared`, retains the existing network,
    user, capability, filesystem and resource restrictions, and uses its Python.
-   The volume and preparation container are removed on completion or failure.
+   The preparation container is always removed. Successful volumes are leased
+   from a bounded process-local cache (8 entries, 30-minute TTL); executions mount
+   them read-only. Uncached/failed volumes are removed, idle expired volumes are
+   reclaimed on preparation, and normal process shutdown removes idle volumes.
+   Abrupt host/process termination can leave `gitresolve-env-*` volumes for an
+   operator to remove when no worker uses them. Runtime containers are never reused.
 
 The venv inherits the reviewed image's pytest/framework tooling. Declared wheels
 can augment that image but never authorize undeclared imports or bypass policy.
@@ -129,6 +134,23 @@ Missing secrets are reported with steps to mock external services or provide saf
 test fixtures, never a request to paste a key. Infrastructure outcomes stop repair
 without charging a repair attempt; model-call usage already incurred stays counted.
 The existing bounded infra retry and exact-diff approval gates remain in force.
+
+## Speed caches and speculation
+
+The baseline cache is process-local, at most 32 entries, five-minute TTL. Only
+successful original pytest baselines with nontruncated evidence and clean cleanup
+qualify. Keys include user/installation scope, repository URL, pinned SHA,
+dependency hash, actual leased environment identity, reviewed image ID, command,
+verifier version and framework/check options. Environment integrity is checked
+before lookup. A rebuild/eviction changes the environment identity. Patched
+requests are never eligible. Cache hits are explicitly marked and cannot replace
+the new regression's original failure or the patched final suite.
+
+Plan-review prewarming is separately bounded to one job per process and 60 seconds,
+with no waiting queue. It stops on rejection, cancellation, base or gate revision
+changes, never changes task state, and uses the same sandbox/cache path without
+credentials or persistent runtime containers. It performs no edits or model calls.
+Runtime stage telemetry separates speculation from the active worker phase.
 
 Real integration command:
 

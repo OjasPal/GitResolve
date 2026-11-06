@@ -69,6 +69,7 @@ class RepositoryView(ResponseModel):
 
 class RepositoryListResponse(ResponseModel):
     items: list[RepositoryView]
+    next_page: int | None = None
 
 
 class IssueListItem(ResponseModel):
@@ -80,6 +81,7 @@ class IssueListItem(ResponseModel):
 
 class IssueListResponse(ResponseModel):
     items: list[IssueListItem]
+    next_page: int | None = None
 
 
 class DevTokenRequest(RequestModel):

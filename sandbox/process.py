@@ -28,6 +28,14 @@ class Captured:
 
 
 def capture(args, deadline, cancel=None, limit=1_000_000, env=None):
+    from githubapp.timing import measure
+    # No command text, repository paths, environment or output enters timing logs.
+    operation = 'docker.run' if args[:2] == ['docker', 'run'] else 'sandbox.process'
+    with measure(operation):
+        return _capture(args, deadline, cancel, limit, env)
+
+
+def _capture(args, deadline, cancel=None, limit=1_000_000, env=None):
     checkpoint(deadline, cancel)
     with subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env) as proc:
         buffers = [bytearray(), bytearray()]

@@ -1,5 +1,7 @@
 """Bounded GitHub API client with sanitized errors and explicit write methods."""
 
+from githubapp.timing import timed
+
 import re
 
 from urllib.parse import quote
@@ -20,49 +22,65 @@ class GitHubClientError(Exception):
 
 
 class GitHubClient:
-    def __init__(self, token: str, refresh=None):
+    def __init__(self, token: str, refresh=None, on_rejected=None):
         if not token:
             raise ValueError("token is required")
         self._refresh = refresh
+        self._on_rejected = on_rejected
         self._headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         }
 
-    def request(self, method: str, path: str, **kwargs):
+    @timed("github.request")
+    def request(self, method: str, path: str, *, etag_cache=None, cache_key=None, **kwargs):
         if not path.startswith("/") or "?" in path or "#" in path:
             raise GitHubClientError("invalid_path")
         if method not in {"GET", "POST"}:
             raise GitHubClientError("unsupported_method")
         refreshed = False
-        for attempt in range(3):
+        cached = etag_cache.get(cache_key) if etag_cache is not None and method == 'GET' else None
+        for attempt in range(2):
             try:
                 call = requests.get if method == "GET" else requests.post
-                res = call(f"{API}{path}", headers=self._headers, timeout=15,
+                request_headers = dict(self._headers)
+                if cached:
+                    request_headers['If-None-Match'] = cached[0]
+                res = call(f"{API}{path}", headers=request_headers, timeout=(3, 7) if method == 'GET' else 15,
                            allow_redirects=False, **kwargs)
             except requests.RequestException:
-                if method == "GET" and attempt < 2:
+                if method == "GET" and attempt < 1:
                     time.sleep(0.25 * (2 ** attempt))
                     continue
                 raise GitHubClientError("github_error") from None
             headers = getattr(res, "headers", {})
+            if res.status_code == 304 and cached:
+                return cached[1]
             if res.status_code == 429 or (res.status_code == 403 and
                     (headers.get("X-RateLimit-Remaining") == "0" or headers.get("Retry-After"))):
                 raise GitHubClientError("github_rate_limited")
             if res.status_code == 401 and self._refresh and not refreshed:
+                if self._on_rejected:
+                    self._on_rejected()
                 self._headers["Authorization"] = f"Bearer {self._refresh()}"
                 refreshed = True
+                cached = None
                 continue
             if res.status_code in (401, 403, 404):
+                if self._on_rejected:
+                    self._on_rejected()
                 raise GitHubClientError("access_revoked")
-            if res.status_code >= 500 and method == "GET" and attempt < 2:
+            if res.status_code >= 500 and method == "GET" and attempt < 1:
                 time.sleep(0.25 * (2 ** attempt))
                 continue
             if not 200 <= res.status_code < 300:
                 raise GitHubClientError("github_error")
             try:
-                return res.json()
+                data = res.json()
+                if method == 'GET' and etag_cache is not None and headers.get('ETag'):
+                    etag_cache.put(cache_key, (headers['ETag'], data))
+                return data
             except (ValueError, TypeError):
                 raise GitHubClientError("github_error") from None
         raise GitHubClientError("github_error")

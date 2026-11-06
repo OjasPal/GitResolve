@@ -2,11 +2,12 @@
 
 import { API_BASE_URL } from "@/lib/api";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
-import { listIssues, listRepositories } from "@/lib/api";
-import { IssueListItem, RepositoryView } from "@/types";
+import { listIssues } from "@/lib/api";
+import { useRepositories } from "@/lib/use-repositories";
+import { IssueListItem } from "@/types";
 import {
   AlertCircle,
   ExternalLink,
@@ -17,41 +18,37 @@ import {
   Wrench} from "lucide-react";
 
 export default function RepositoriesPage() {
-  const [repositories, setRepositories] = useState<RepositoryView[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
+  const repoQuery = useRepositories();
+  const { repositories, loading } = repoQuery;
+  const [issueError, setError] = useState<string | null>(null);
+  const error = repoQuery.error || issueError;
   const [selectedRepo, setSelectedRepo] = useState<string | null>(null);
   const [issues, setIssues] = useState<IssueListItem[]>([]);
   const [loadingIssues, setLoadingIssues] = useState<boolean>(false);
   const [search, setSearch] = useState("");
+  const [nextIssues, setNextIssues] = useState<number | null>(null);
+  const issueVersion = useRef(0);
 
-  const loadRepos = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const res = await listRepositories();
-      setRepositories(res.items || []);
-      setSelectedRepo((current) => res.items.some((r) => r.id === current) ? current : res.items[0]?.id || null);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to load repositories");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const loadRepos = () => repoQuery.refresh();
 
   useEffect(() => {
-    const timer = setTimeout(() => loadRepos(), 0);
+    if (selectedRepo || !repositories.length) return;
+    const timer = setTimeout(() => setSelectedRepo(repositories[0].id), 0);
     return () => clearTimeout(timer);
-  }, [loadRepos]);
+  }, [repositories, selectedRepo]);
 
   useEffect(() => {
     if (!selectedRepo) return;
+    const version = ++issueVersion.current;
     let cancelled = false;
     const fetchIssues = async () => {
       try {
         setLoadingIssues(true);
+        setIssues([]);
+        setNextIssues(null);
+        setError(null);
         const res = await listIssues(selectedRepo);
-        if (!cancelled) setIssues(res.items || []);
+        if (!cancelled) { setIssues(res.items || []); setNextIssues(res.nextPage || null); }
       } catch (err) {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : "Unable to load issues.");
@@ -61,8 +58,21 @@ export default function RepositoriesPage() {
       }
     };
     const timer = setTimeout(fetchIssues, 0);
-    return () => { cancelled = true; clearTimeout(timer); };
+    return () => { cancelled = true; issueVersion.current = version + 1; clearTimeout(timer); };
   }, [selectedRepo]);
+
+  const loadMoreIssues = async () => {
+    if (!selectedRepo || !nextIssues || loadingIssues) return;
+    const version = issueVersion.current;
+    setLoadingIssues(true);
+    try {
+      const result = await listIssues(selectedRepo, nextIssues);
+      if (version !== issueVersion.current) return;
+      setIssues(old => [...new Map([...old, ...result.items].map(i => [i.number, i])).values()]);
+      setNextIssues(result.nextPage || null);
+    } catch (err) { if (version === issueVersion.current) setError(err instanceof Error ? err.message : "Unable to load more issues."); }
+    finally { if (version === issueVersion.current) setLoadingIssues(false); }
+  };
 
   const filteredRepos = repositories.filter((r) =>
     r.fullName.toLowerCase().includes(search.toLowerCase()) ||
@@ -140,7 +150,7 @@ export default function RepositoriesPage() {
           <div className="md:col-span-1 border border-neutral-200 dark:border-neutral-800 rounded-xl bg-white dark:bg-neutral-900 overflow-hidden divide-y divide-neutral-200 dark:divide-neutral-800">
             <div className="p-3 bg-neutral-50 dark:bg-neutral-950 font-mono text-xs text-neutral-500 flex items-center justify-between">
               <span>Installed Repositories</span>
-              <span>{repositories.length} total</span>
+              <span>{repositories.length} loaded</span>
             </div>
 
             {loading ? (
@@ -194,6 +204,7 @@ export default function RepositoriesPage() {
                 })}
               </div>
             )}
+            {repoQuery.hasMore && <button className="button w-full" disabled={repoQuery.loadingMore} onClick={()=>void repoQuery.loadMore()}>Load more repositories</button>}
           </div>
 
           {/* Right Column: Selected Repo issues & action */}
@@ -222,6 +233,7 @@ export default function RepositoriesPage() {
                   </Link>
                 </div>
 
+                {nextIssues && <button className="button" disabled={loadingIssues} onClick={()=>void loadMoreIssues()}>Load more issues</button>}
                 {/* Open issues list */}
                 <div className="space-y-3">
                   <h3 className="text-xs font-mono uppercase tracking-wider text-neutral-500">

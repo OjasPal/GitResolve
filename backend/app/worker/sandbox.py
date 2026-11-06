@@ -10,7 +10,7 @@ from app.schemas.enums import FailureCode
 from app.services.worker_service import ExecutionLimit
 
 
-def execute(ctx, *, commit_sha: str, command: list[str], patch: str = ""):
+def execute(ctx, *, commit_sha: str, command: list[str], patch: str = "", baseline=False):
     """Execute pinned public repository code with the task's remaining budget.
 
     Returns ExecutionResult. A passing process is not proof of a fixed bug;
@@ -66,6 +66,8 @@ def execute(ctx, *, commit_sha: str, command: list[str], patch: str = ""):
             stopped.append(exc)
             return True  # store outages must stop execution too
     kwargs = {}
+    if baseline and not patch:
+        kwargs['baseline_scope'] = f"{task['userId']}:{task['repoId']}"
     source_errors = []
     if ctx.github is not None:
         provider = ctx.github.source(task)
@@ -88,6 +90,9 @@ def execute(ctx, *, commit_sha: str, command: list[str], patch: str = ""):
         raise source_errors[0]
     ctx.checkpoint()
     ctx.usage(execSeconds=task["budgets"]["execSeconds"] + result.duration_ms / 1000)
+    if getattr(result, 'baseline_cache_hit', False):
+        from app.schemas.enums import EventType
+        ctx.event(EventType.INFO, 'Reused a verified original baseline for this pinned snapshot; patched verification still runs in Docker.')
     import re
     from app.services.ids import sha256_hash
     from app.services.publication_patch import publication_patch
@@ -99,6 +104,7 @@ def execute(ctx, *, commit_sha: str, command: list[str], patch: str = ""):
         "command": command, "passed": result.status == "passed" and result.exit_code == 0
             and not result.oom_killed and result.cleanup_ok,
         "executionId": result.execution_id,
+        "baselineCacheHit": getattr(result, 'baseline_cache_hit', False),
         **({"allowedDeletions":deletion_names,"cleanupVerified":bool(patch and result.exit_code==0 and "CLEANUP GATE PASSED:" in result.stdout)} if deletion_names else {}),
         "testsRun": sum(int(n) for n in re.findall(r"\b(\d+) passed\b", result.stdout))
                     if command[:3] == ["python", "-m", "pytest"]

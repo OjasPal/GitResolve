@@ -6,8 +6,9 @@ import Link from "next/link";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { RepairComposer } from "@/components/RepairComposer";
 import { RepositorySelector } from "@/components/RepositorySelector";
-import { createTask, listIssues, listRepositories } from "@/lib/api";
-import { IssueListItem, RepositoryView } from "@/types";
+import { createTask, listIssues } from "@/lib/api";
+import { IssueListItem } from "@/types";
+import { useRepositories } from "@/lib/use-repositories";
 import {
   AlertCircle,
   ArrowLeft,
@@ -19,9 +20,11 @@ import {
 export default function NewRepairPage() {
   const router = useRouter();
 
-  const [repositories, setRepositories] = useState<RepositoryView[]>([]);
+  const repoQuery = useRepositories();
+  const { repositories, loading: loadingRepos } = repoQuery;
   const [selectedRepoId, setSelectedRepoId] = useState<string>("");
   const [issues, setIssues] = useState<IssueListItem[]>([]);
+  const [nextIssues, setNextIssues] = useState<number | null>(null);
   const [selectedIssueNumber, setSelectedIssueNumber] = useState<number | null>(null);
 
   // Keep retries idempotent and ignore stale repository issue responses.
@@ -34,33 +37,17 @@ export default function NewRepairPage() {
   const [prompt, setPrompt] = useState("");
   const [issueError, setIssueError] = useState<string | null>(null);
 
-  const [loadingRepos, setLoadingRepos] = useState<boolean>(true);
   const [loadingIssues, setLoadingIssues] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  // 1. Fetch repositories on load
-  const loadRepos = async () => {
-    try {
-      setLoadingRepos(true);
-      setError(null);
-      const res = await listRepositories();
-      setRepositories(res.items || []);
-      if (res.items && res.items.length > 0) {
-        const requested = new URLSearchParams(window.location.search).get("repo");
-        setSelectedRepoId(res.items.find((r) => r.id === requested)?.id || res.items[0].id);
-      }
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to load accessible repositories");
-    } finally {
-      setLoadingRepos(false);
-    }
-  };
-
+  const loadRepos = () => repoQuery.refresh();
   useEffect(() => {
-    const timer = setTimeout(() => loadRepos(), 0);
+    if (!repositories.length || selectedRepoId) return;
+    const requested = new URLSearchParams(window.location.search).get("repo");
+    const timer = setTimeout(() => setSelectedRepoId(repositories.find(r => r.id === requested)?.id || repositories[0].id), 0);
     return () => clearTimeout(timer);
-  }, []);
+  }, [repositories, selectedRepoId]);
 
   // 2. Fetch issues whenever repo changes
   useEffect(() => {
@@ -70,12 +57,14 @@ export default function NewRepairPage() {
     const fetchIssuesForRepo = async () => {
       try {
         setIssues([]);
+        setNextIssues(null);
         setLoadingIssues(true);
         setIssueError(null);
         setSelectedIssueNumber(null);
         const res = await listIssues(selectedRepoId);
         if (version !== requestVersion.current) return;
         setIssues(res.items || []);
+        setNextIssues(res.nextPage || null);
         if (res.items && res.items.length > 0) {
           const requested = Number(new URLSearchParams(window.location.search).get("issue"));
           setSelectedIssueNumber(res.items.find((i) => i.number === requested)?.number || res.items[0].number);
@@ -102,6 +91,19 @@ export default function NewRepairPage() {
   const handleIssueSelect = (num: number) => {
     setSelectedIssueNumber(num);
 
+  };
+
+  const loadMoreIssues = async () => {
+    if (!nextIssues || loadingIssues) return;
+    const version = requestVersion.current;
+    setLoadingIssues(true);
+    try {
+      const res = await listIssues(selectedRepoId, nextIssues);
+      if (version !== requestVersion.current) return;
+      setIssues(old => [...new Map([...old, ...res.items].map(i => [i.number, i])).values()]);
+      setNextIssues(res.nextPage || null);
+    } catch (err) { if (version === requestVersion.current) setIssueError(err instanceof Error ? err.message : "Unable to load more issues."); }
+    finally { if (version === requestVersion.current) setLoadingIssues(false); }
   };
 
   useEffect(() => { submissionKey.current = null; }, [selectedRepoId, selectedIssueNumber, issueMode, prompt, attachmentIds]);
@@ -185,6 +187,9 @@ export default function NewRepairPage() {
             onSelect={(id) => setSelectedRepoId(id)}
             loading={loadingRepos}
             onRefresh={loadRepos}
+            error={repoQuery.error}
+            onLoadMore={repoQuery.hasMore ? () => void repoQuery.loadMore() : undefined}
+            loadingMore={repoQuery.loadingMore}
           />
 
           {/* Issue Mode Toggle */}
@@ -262,6 +267,7 @@ export default function NewRepairPage() {
               <RepairComposer value={prompt} onChange={setPrompt} onAttachments={setAttachmentIds} onBusyChange={setAttachmentsBusy} disabled={submitting}/>
 
             )}
+            {issueMode === "github" && nextIssues && <button type="button" className="button" disabled={loadingIssues} onClick={()=>void loadMoreIssues()}>Load more issues</button>}
           </div>
 
           {/* Integration Transparency Note */}

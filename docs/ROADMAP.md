@@ -6,7 +6,9 @@ Reconciled 2026-11-06; branch `agent/workflow-optimization`. Status describes ve
 | --- | --- | --- | --- |
 | 0 | Safe errors, outcomes, durable persistence and leases | done | `21232ed` |
 | 1 | Python repository adaptation and wheel-only environments | done | `dfe0c8c` |
-| 2A | Speed first, then checkpointed model-tool-model repair | partial | No milestone commit yet |
+| 2A speed | Listing/UI responsiveness and execution caches | implemented; validation limits below | `git log -1 --format=%h -- docs/speed-validation.md` |
+| AL | Shared deterministic adaptive lanes | proposal ready; awaiting STOP A approval | Not implemented |
+| 2A graph | Checkpointed model-tool-model repair using shared lanes | design ready; awaits AL | Not implemented |
 | 2B | Firestore saver and reaper-driven graph resume | not started | Explicitly deferred |
 
 ## Phase 0
@@ -31,12 +33,19 @@ Reconciled 2026-11-06; branch `agent/workflow-optimization`. Status describes ve
 
 ## Phase 2A - partial
 
-### Implemented so far, uncommitted
+### Speed milestone
 
-- `githubapp/timing.py`: operation spans/capture. Instrumented GitHub request/token/listing calls and worker stage/first-model-event/Docker-call timing.
-- `scripts/benchmark_github_listings.py`: read-only live listing benchmark with timing/count output only.
-- Targeted validation: `$env:ENVIRONMENT='test'; .venv/Scripts/python.exe -m pytest backend/tests/unit/test_worker_recovery.py backend/tests/unit/test_core.py -q --tb=short` - **9 passed**.
-- Live baseline exited before requests because two local users exist. The script also assumes an `id` field absent from user documents; IDs must come from document keys. No before/after timings or actual model token measurements exist yet.
+- Replaced preliminary timing with SDK invocation, final-stage flush, per-stage known usage and actual Docker launch instrumentation. Explicit owner selection fixes the listing benchmark.
+- Scoped TTL/ETag display caches, scoped expiring installation tokens, bounded permission concurrency, lazy 30-candidate pages and fresh task/source/publication authorization. Backend and client caches never grant write access.
+- Read-only prepared environment reuse, original-only baseline caching and bounded cancellable plan-review prewarming. Patched tests still run in a fresh hardened container; wheels remain wheel-only.
+- Nonblocking AppAccess, existing TanStack Query for per-session stale-while-revalidate data, lazy pages and route skeleton. No new frontend dependency.
+- Live repeated listings: repositories **19.296 s -> 0.345 ms**, issues **20.535 s -> 0.062 ms** at the gateway process cache. Cold repository discovery remains **11.433 s**. These are not browser timings.
+- Scripted warm repair cache-off/on: trivial **4.497 -> 3.305 s**, multi-file behavior **16.502 -> 4.296 s**; Docker launches **3 -> 2** and **6 -> 2** respectively. Zero live model tokens in these fixtures.
+- Gemini schema probe: union rejected locally; flat action envelope accepted, **199 input / 55 output tokens**, 15.426 s. Graph will use flat args with per-tool post-validation.
+- Full suite once: **428 passed, 2 Firestore skips**. Final gateway error-contract correction followed by **43 affected tests passed**; no repeated full suite. **24** targeted cache/real-Docker tests passed; frontend **5 tests**, lint and build passed.
+- Browser access approval timed out; no browser navigation/hydration/dropdown timing claim. Saved shared backend tunnel unavailable; no successful teammate tunnel comparison. Historical PrompCraft issue 2 run not found for the selected identity.
+- Exact commands, raw results, caveats: [speed-validation.md](speed-validation.md). AL proposal: [adaptive-lanes-proposal.md](adaptive-lanes-proposal.md). Graph design: [phase-2a-graph-design.md](phase-2a-graph-design.md).
+- Prior documentation checkpoint is `e6d9d4e`. The current commit uses the table's `git log` pointer because it cannot contain its own hash. Original prompts are preserved verbatim under `docs/prompts/`.
 
 ### Approved decisions and sequence
 
@@ -52,8 +61,8 @@ Reconciled 2026-11-06; branch `agent/workflow-optimization`. Status describes ve
 
 ### Still pending
 
-Usable live baseline and after measurements; pagination/caches/concurrency and shell changes; speed milestone commit; Gemini probe; StateGraph and SQLite recovery; tools/reducers/configurable budgets/engine flag; prepared-env/baseline caching/prewarming; scripted NameError/CSV-export and MCQGen scenarios; safety/recovery/Docker tests; timing table and actual token counts; graph milestone commit(s).
+STOP A approval, then commit 2 (`AL`) and commit 3 (`2A-graph`). Implement graph-agnostic lane modules behind `ADAPTIVE_LANES`, deterministic oracle/planner and safe static-evidence publication receipts, monotonic escalation and adversarial shadow evaluation. Default lanes on only with zero unsafe-fast cases. Graph nodes must reuse those modules; add StateGraph, SQLite recovery, tools/reducers/budgets and phase-pinned `AGENT_ENGINE`. Run the specified NameError/CSV-export, MCQGen, eligible PrompCraft-shape, escalation, crash and legacy-parity scenarios. Live teammate/browser/tunnel verification remains explicitly unverified; Firestore saver/reaper-resume stays 2B.
 
-Targets, not measured achievements: warm listings around 3 seconds, first action around 10 seconds after Start, tiny fixes within minutes. No Phase 2A graph, checkpoint schema, listing API or frontend contract change is implemented yet.
+Targets, not measured achievements: end-to-end warm listings around 3 seconds, first real action around 10 seconds after Start, tiny live fixes within minutes. Process cache and scripted fixture measurements do not establish those live targets. No execution graph, checkpoint schema or adaptive lane implementation exists yet.
 
-Latest instruction for this checkpoint: **do not change code**. Preserve pending instrumentation, commit durable documentation only, and do not claim Phase 2A complete. Resume implementation only when code changes are authorized again.
+The 2026-11-06 kickoff supersedes the old “do not change code” checkpoint: implementation and local milestone commits are authorized. No push or merge. STOP A still requires the user's approval after speed/probe/design reporting before implementing AL/graph. The later request to continue after usage limits did not remove that gate.

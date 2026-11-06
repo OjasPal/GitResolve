@@ -127,6 +127,11 @@ class Worker:
         beat.start()
         ctx = JobContext(self.service, job.task_id, self.worker_id, self.github)
         ctx.stopped = beat.stopped
+        from contextlib import ExitStack
+        from githubapp.timing import model_dispatch_scope, observe_timings
+        timing_scope = ExitStack()
+        timing_scope.enter_context(model_dispatch_scope(ctx.model_dispatched))
+        timing_scope.enter_context(observe_timings(ctx.observe_timing))
         try:
             ctx.checkpoint()
             if job.phase == DispatchPhase.PLAN:
@@ -162,6 +167,8 @@ class Worker:
                 )
             )
         finally:
+            timing_scope.__exit__(None, None, None)
+            ctx.flush_timing()
             beat.stop()
             beat.join(timeout=2)
 
@@ -190,6 +197,8 @@ class Worker:
         ctx.checkpoint()
         if result.outcome == "ready" and result.plan is not None:
             self.service.complete_plan(job.task_id, self.worker_id, result.plan)
+            from app.worker.prewarm import start
+            start(self.service, self.github, job.task_id)
         elif result.outcome == "needs_input":
             self.service.fail(
                 job.task_id, self.worker_id, FailureCode.ISSUE_AMBIGUOUS,

@@ -8,10 +8,62 @@ import sys
 import tempfile
 import time
 import uuid
+from threading import RLock
+from contextlib import contextmanager
+import atexit
 from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
 from sandbox.dependencies import DependencyError, declared_requirements, requirement, marker_applies, wheel_metadata
 from sandbox.process import capture, checkpoint, SandboxError
+
+_environments = {}
+_environment_lock = RLock()
+ENVIRONMENT_CACHE_LIMIT = 8
+ENVIRONMENT_CACHE_TTL = 1800
+
+
+@contextmanager
+def environment_lock(deadline, cancel):
+    while not _environment_lock.acquire(timeout=0.1):
+        checkpoint(deadline, cancel)
+    try:
+        checkpoint(deadline, cancel)
+        yield
+    finally:
+        _environment_lock.release()
+
+
+def clear_idle_environments(shutdown=False):
+    from sandbox.process import _capture
+    cleanup_capture = _capture if shutdown else capture
+    with _environment_lock:
+        for key, entry in list(_environments.items()):
+            if entry['users'] == 0:
+                try:
+                    removed = cleanup_capture(['docker', 'volume', 'rm', '-f', entry['volume']], time.monotonic() + 10, limit=4096)
+                    if removed.returncode == 0:
+                        del _environments[key]
+                except Exception:
+                    pass
+
+
+atexit.register(clear_idle_environments, shutdown=True)
+
+
+def release_environment(volume):
+    """Only drop the lease; execution containers always mount cached volumes read-only."""
+    if not _environment_lock.acquire(timeout=10):
+        raise SandboxError('cleanup_failed', 'Prepared environment lease could not be released.')
+    try:
+        for entry in _environments.values():
+            if entry['volume'] == volume:
+                entry['users'] -= 1
+                return
+    finally:
+        _environment_lock.release()
+    removed = capture(['docker', 'volume', 'rm', '-f', volume], time.monotonic() + 10, limit=4096)
+    if removed.returncode:
+        raise SandboxError('cleanup_failed', 'Prepared environment cleanup failed.')
 
 
 def download_wheels(specs, destination, deadline, cancel=None):
@@ -85,6 +137,29 @@ def prepare_environment(repo, profile, image, workspace, deadline, cancel=None):
     digest = inspected.stdout.decode().strip()
     cache_key = hashlib.sha256((dependency_hash + "|3.12|" + digest).encode()).hexdigest()
     wheelhouse = cached_wheels(specs, cache_key, deadline, cancel)
+    with environment_lock(deadline, cancel):
+        for key, entry in list(_environments.items()):
+            if entry['users'] == 0 and entry['expires'] <= time.monotonic():
+                removed = capture(['docker', 'volume', 'rm', '-f', entry['volume']], deadline, cancel, 4096)
+                if removed.returncode:
+                    raise SandboxError('cleanup_failed', 'Expired environment cleanup failed.')
+                del _environments[key]
+        entry = _environments.get(cache_key)
+        if entry is not None:
+            present = capture(['docker', 'volume', 'inspect', entry['volume']], deadline, cancel, 4096)
+            if present.returncode == 0:
+                entry['users'] += 1
+                return entry['volume']
+            del _environments[cache_key]
+        volume = _build_environment(wheelhouse, image, deadline, cancel)
+        if len(_environments) < ENVIRONMENT_CACHE_LIMIT:
+            _environments[cache_key] = {'volume': volume, 'users': 1,
+                                       'expires': time.monotonic() + ENVIRONMENT_CACHE_TTL}
+        # At capacity this is an ephemeral volume; release_environment removes it.
+        return volume
+
+
+def _build_environment(wheelhouse, image, deadline, cancel):
     prepared = "gitresolve-env-" + uuid.uuid4().hex[:12]
     success = False
     container = "gitresolve-prepare-" + uuid.uuid4().hex[:12]

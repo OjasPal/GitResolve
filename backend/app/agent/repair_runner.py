@@ -255,7 +255,7 @@ def run_repair(task, ctx, router=None):
     command = adapter.configure(ctx, entrypoint, report, command)
     ctx.stage(TaskStage.BASELINE)
     ctx.event(EventType.TEST_RUN, "Running the original repository test suite in Docker.")
-    baseline = ctx.execute(commit_sha=task.base_sha, command=command)
+    baseline = getattr(ctx, 'baseline', ctx.execute)(commit_sha=task.base_sha, command=command)
     from sandbox.classification import classify, INFRA_CATEGORIES
     category = classify(baseline)
     if category in INFRA_CATEGORIES or category == "collection_error":

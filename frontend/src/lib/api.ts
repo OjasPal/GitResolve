@@ -7,6 +7,19 @@ import {
   RepositoryListResponse,
   TaskListResponse,
   TaskResponse} from "@/types";
+import { apiQueryClient } from "./query-client";
+
+let cacheOwner: string | null = null;
+let cacheGeneration = 0;
+function queryScope() {
+  const token = getAuthToken();
+  if (token !== cacheOwner) {
+    apiQueryClient.clear();
+    cacheOwner = token;
+    cacheGeneration += 1;
+  }
+  return cacheGeneration;
+}
 
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000/api/v1";
@@ -40,6 +53,7 @@ export function setAuthToken(token: string): void {
   if (typeof window === "undefined") return;
   sessionStorage.setItem(TOKEN_KEY, token);
   localStorage.setItem(TOKEN_KEY, token);
+  queryScope();
   window.dispatchEvent(new Event("auth_change"));
 }
 
@@ -49,6 +63,7 @@ export function clearAuthToken(): void {
   localStorage.removeItem(TOKEN_KEY);
   sessionStorage.removeItem(USER_KEY);
   localStorage.removeItem(USER_KEY);
+  queryScope();
   window.dispatchEvent(new Event("auth_change"));
 }
 
@@ -82,7 +97,7 @@ async function request<T>(
   }
 
   if (res.status === 401) {
-    clearAuthToken();
+    if (getAuthToken() === token) clearAuthToken();
     throw new ApiError("Session expired or unauthorized.", "unauthorized", 401);
   }
 
@@ -104,6 +119,7 @@ async function request<T>(
     );
   }
 
+  if (getAuthToken() !== token) throw new ApiError("Account changed. Please retry.", "session_changed", 409);
   return body as T;
 }
 
@@ -120,12 +136,25 @@ export async function getMe(): Promise<MeResponse> {
 
 // --- Repository & Issue Endpoints ---
 
-export async function listRepositories(): Promise<RepositoryListResponse> {
-  return request<RepositoryListResponse>("/repositories");
+export function repositoryQuery(page = 1) {
+  return {
+    queryKey: ["repositories", queryScope(), page],
+    queryFn: () => request<RepositoryListResponse>(`/repositories?page=${page}`),
+    staleTime: 15_000,
+  };
 }
 
-export async function listIssues(repoId: string): Promise<IssueListResponse> {
-  return request<IssueListResponse>(`/repositories/${encodeURIComponent(repoId)}/issues?state=open`);
+export async function listRepositories(page = 1): Promise<RepositoryListResponse> {
+  return apiQueryClient.ensureQueryData({ ...repositoryQuery(page), revalidateIfStale: true });
+}
+
+export function cachedRepositories(): RepositoryListResponse | undefined {
+  return apiQueryClient.getQueryData(repositoryQuery().queryKey);
+}
+
+export async function listIssues(repoId: string, page = 1): Promise<IssueListResponse> {
+  return apiQueryClient.fetchQuery({ queryKey: ["issues", queryScope(), repoId, page], staleTime: 15_000,
+    queryFn: () => request<IssueListResponse>(`/repositories/${encodeURIComponent(repoId)}/issues?state=open&page=${page}`) });
 }
 
 // --- Task Lifecycle Endpoints ---

@@ -193,6 +193,8 @@ class GoogleGenAIProvider(BaseProvider):
 
             config = types.GenerateContentConfig(**config_kwargs) if config_kwargs else None
 
+            from githubapp.timing import model_dispatched
+            model_dispatched()
             response = client.models.generate_content(
                 model=model_id,
                 contents=([types.Part.from_text(text=str(prompt))] + [types.Part.from_bytes(data=image, mime_type="image/png") for image in prompt.images]

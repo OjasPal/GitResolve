@@ -110,8 +110,12 @@ class ModelRouter:
             if self.before_call:
                 self.before_call(model_cfg.provider, model_cfg.model_id)
             try:
-                result = provider.generate(model_id=model_cfg.model_id, prompt=prompt, schema=schema,
-                                           system_instruction=system_instruction, task_id=task_id)
+                from githubapp.timing import measure
+                with measure('model.generate', provider=model_cfg.provider, model=model_cfg.model_id) as timing:
+                    result = provider.generate(model_id=model_cfg.model_id, prompt=prompt, schema=schema,
+                                               system_instruction=system_instruction, task_id=task_id)
+                    if result.usage:
+                        timing.update(input_tokens=result.usage.input_tokens, output_tokens=result.usage.output_tokens)
                 return result, retries, errors, None
             except ProviderError as exc:
                 detail = {"provider": model_cfg.provider, "model_id": model_cfg.model_id,
