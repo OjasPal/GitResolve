@@ -112,7 +112,8 @@ def build_event(task: Doc, seq: int, stage: str, spec: EventSpec, now: datetime,
     # Metadata is a closed, scalar-only vocabulary, never arbitrary tool output.
     allowed = {"from", "to", "stage", "code", "n", "number", "diffHash",
                "durationMs", "ran", "passed", "failed", "timedOut", "attempt",
-               "modelCalls", "inputTokens", "outputTokens", "execSeconds", "model", "statusCode", "errorType"}
+               "modelCalls", "inputTokens", "outputTokens", "execSeconds", "model", "statusCode", "errorType",
+               "kind", "resumeCount", "lane", "riskFloor"}
     data = {
         key: redact(value, 200) if isinstance(value, str) else value
         for key, value in spec.data.items()

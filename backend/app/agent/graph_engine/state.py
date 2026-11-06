@@ -1,13 +1,17 @@
-"""Typed RepairState, bounded reducers, and budget/checkpoint validation for Phase 2A."""
+"""Typed RepairState, bounded reducers, and budget/checkpoint validation for Phase 2A/2B."""
 from __future__ import annotations
 
+import json
 import os
 import re
 from typing import Annotated, Any, Literal, Mapping, NotRequired, TypedDict
 
+from app.agent.lanes.types import LANES_POLICY_VERSION
 from app.core.redaction import redact, redact_value
 
 CHECKPOINT_SCHEMA_VERSION = "2a.v1"
+MAX_CHECKPOINT_BYTES = 240_000
+MAX_PRESERVED_EVIDENCE_BYTES = 4_000
 
 DEFAULT_MAX_GRAPH_STEPS = 240
 DEFAULT_MAX_TOOL_CALLS = 120
@@ -60,7 +64,7 @@ def reduce_messages(
 
     if len(combined) > MAX_MESSAGES_IN_STATE:
         retained_ids = [
-            m["evidence_id"] for m in combined[:- (MAX_MESSAGES_IN_STATE - 1)]
+            m["evidence_id"] for m in combined[: -(MAX_MESSAGES_IN_STATE - 1)]
             if m.get("evidence_id")
         ]
         compacted_header = {
@@ -69,7 +73,7 @@ def reduce_messages(
             "summary": f"Compacted {len(combined) - (MAX_MESSAGES_IN_STATE - 1)} earlier steps.",
             "evidence_id": ",".join(retained_ids[:10]) if retained_ids else "compacted",
         }
-        combined = [compacted_header, *combined[-(MAX_MESSAGES_IN_STATE - 1):]]
+        combined = [compacted_header, *combined[-(MAX_MESSAGES_IN_STATE - 1) :]]
     return combined
 
 
@@ -97,7 +101,7 @@ def reduce_attempts(
 
 
 class RepairState(TypedDict):
-    """Durable, bounded LangGraph state for Phase 2A repair execution.
+    """Durable, bounded LangGraph state for Phase 2A/2B repair execution.
 
     Never stores raw repository file contents, full test logs, hidden reasoning,
     secrets, or host temporary paths.
@@ -107,6 +111,9 @@ class RepairState(TypedDict):
     base_sha: str
     pinned_engine: Literal["graph", "legacy"]
     checkpoint_schema_version: str
+    lanes_policy_version: NotRequired[str]
+    pinned_adaptive_lanes: NotRequired[Literal["on", "off"]]
+    crash_resumes: NotRequired[int]
 
     # Profile & environment metadata (references only, no file contents)
     profile_summary: dict[str, Any]
@@ -124,6 +131,7 @@ class RepairState(TypedDict):
     verification_plan: NotRequired[dict[str, Any] | None]
     oracle_evidence: NotRequired[dict[str, Any] | None]
     escalations: list[dict[str, Any]]
+    fast_usage: NotRequired[dict[str, Any]]
 
     # Investigation & localization state
     hypotheses: list[str]
@@ -152,6 +160,8 @@ class RepairState(TypedDict):
     action_history_hashes: list[str]
     repeated_action_count: int
     recovery_read_triggered: NotRequired[bool]
+    patch_loop_done: NotRequired[bool]
+    patch_turns_in_attempt: NotRequired[int]
 
     # Budget counters & ceilings
     budgets: dict[str, int]
@@ -181,8 +191,8 @@ _HOST_TEMP_RE = re.compile(
 
 
 def validate_checkpoint_payload(state: Mapping[str, Any] | dict[str, Any]) -> None:
-    """Verify checkpoint state contains no forbidden keys, secrets, or host paths."""
-    if not isinstance(state, dict):
+    """Verify checkpoint state contains no forbidden keys, secrets, host paths, or oversized blobs."""
+    if not isinstance(state, Mapping):
         return
     if state.get("checkpoint_schema_version") and state["checkpoint_schema_version"] != CHECKPOINT_SCHEMA_VERSION:
         raise ValueError(f"Incompatible checkpoint schema version: {state.get('checkpoint_schema_version')}")
@@ -196,3 +206,41 @@ def validate_checkpoint_payload(state: Mapping[str, Any] | dict[str, Any]) -> No
             raise ValueError(f"Checkpoint field {key} exceeds bounded size limit.")
         if isinstance(val, str) and _HOST_TEMP_RE.search(val):
             raise ValueError(f"Checkpoint field {key} contains an unredacted host path.")
+
+    escalations = state.get("escalations")
+    if isinstance(escalations, list):
+        if len(escalations) > 16:
+            raise ValueError("Checkpoint escalations list exceeds bounded length (16).")
+        for idx, esc in enumerate(escalations):
+            if isinstance(esc, Mapping):
+                pe = esc.get("preservedEvidence") or esc.get("preserved_evidence") or {}
+                if isinstance(pe, Mapping):
+                    if any(k in pe for k in ("triage", "verificationPlan", "oracle", "fastCandidateDiff")):
+                        raise ValueError(
+                            f"Escalation[{idx}].preservedEvidence embeds full uncompacted evidence; store compact refs/hashes only."
+                        )
+                    pe_bytes = len(json.dumps(pe, default=str).encode("utf-8"))
+                    if pe_bytes > MAX_PRESERVED_EVIDENCE_BYTES:
+                        raise ValueError(
+                            f"Escalation[{idx}].preservedEvidence exceeds {MAX_PRESERVED_EVIDENCE_BYTES} bytes ({pe_bytes})."
+                        )
+
+    total_bytes = len(json.dumps(dict(state), default=str).encode("utf-8"))
+    if total_bytes > MAX_CHECKPOINT_BYTES:
+        raise ValueError(
+            f"Checkpoint payload size ({total_bytes} bytes) exceeds MAX_CHECKPOINT_BYTES ({MAX_CHECKPOINT_BYTES})."
+        )
+
+
+__all__ = [
+    "CHECKPOINT_SCHEMA_VERSION",
+    "LANES_POLICY_VERSION",
+    "MAX_CHECKPOINT_BYTES",
+    "MAX_PRESERVED_EVIDENCE_BYTES",
+    "RepairState",
+    "configured_budgets",
+    "get_engine_mode",
+    "reduce_attempts",
+    "reduce_messages",
+    "validate_checkpoint_payload",
+]

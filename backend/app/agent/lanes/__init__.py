@@ -9,6 +9,7 @@ from app.agent.lanes.oracle import (
     ORACLE_GATE_MARKER,
     ORACLE_ORIG_MARKER,
     build_oracle_command,
+    is_oracle_evidence_valid,
     run_oracle_verification,
 )
 from app.agent.lanes.planner import (
@@ -29,6 +30,7 @@ from app.agent.lanes.types import (
     EscalationReason,
     FAST_MAX_PROVIDER_CALLS,
     FAST_SUB_DEADLINE_SECONDS,
+    LANES_POLICY_VERSION,
     LaneName,
     OracleEvidence,
     PatchFacts,
@@ -45,6 +47,7 @@ __all__ = [
     "EscalationReason",
     "FAST_MAX_PROVIDER_CALLS",
     "FAST_SUB_DEADLINE_SECONDS",
+    "LANES_POLICY_VERSION",
     "LaneName",
     "LaneRuntimeState",
     "ORACLE_GATE_MARKER",
@@ -63,6 +66,7 @@ __all__ = [
     "build_oracle_command",
     "check_fast_budget",
     "escalate",
+    "is_oracle_evidence_valid",
     "is_override_path",
     "max_risk",
     "plan_verification",

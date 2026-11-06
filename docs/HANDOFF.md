@@ -1,22 +1,24 @@
-# Handoff — 2026-11-06 — Phase 2A Tool-Using LangGraph Repair Engine
+# Handoff — 2026-11-07 — Phase 2B Store Checkpointer & Reaper-Driven Resume
 
 ## Branch and commits
 - Branch: `agent/workflow-optimization`
-- Prior commits: Phase 0 `21232ed`, Phase 1 `dfe0c8c`, docs checkpoint `e6d9d4e`, speed `18c6da9`, docs consolidation `7aceb9b`, recoverable `blocked_reason` `6f1a4f5`, adaptive lanes `9834328`.
-- Current milestone commit: `feat: tool-using LangGraph repair engine`.
+- Prior commits: Phase 0 `21232ed`, Phase 1 `dfe0c8c`, speed `18c6da9`, docs `7aceb9b`, recoverable `blocked_reason` `6f1a4f5`, adaptive lanes `9834328`, Phase 2A graph `9313144`.
 
 ## Working state and validation
-- Implemented `backend/app/agent/graph_engine/` (`state.py`, `checkpointer.py`, `workspace.py`, `tools.py`, `engine.py`) and wired `run_repair()` behind `AGENT_ENGINE=graph|legacy` (default `graph`, `legacy` preserved alongside `agent/repair.py`).
-- `StateGraph(RepairState)` integrates shared `backend/app/agent/lanes/` (`ADAPTIVE_LANES=on` default), `SqliteRepairCheckpointer` (`thread_id=f"{task_id}:{phase}"`, RLock-synchronized, schema `2a.v1` and engine pinning), rehydratable `WorkspaceOverlay`, and 14 typed tools using the Gemini-validated flat `RepairActionEnvelope`.
-- Targeted tests: `backend/tests/unit/test_phase_2a_graph.py` -> **11 passed in 1.88s**; real Docker/Streamlit `test_prepared_environments.py` + `test_streamlit_gate.py` -> **22 passed in 56.22s**.
-- Scripted real-Docker benchmark (`trivial`, 0 live tokens): cold/pass-1 `3793.7 ms -> 2105.5 ms` (first action `1319.2 ms -> 418.7 ms`, Docker runs `3 -> 2`); warm/pass-2 `2541.1 ms -> 1739.8 ms` (first action `117.7 ms -> 18.1 ms`).
-- Full test suite: `.venv/Scripts/python.exe -m pytest -q --tb=short` -> **473 passed, 2 skipped** (Firestore).
+- Implemented `StoreRepairCheckpointer` (`FirestoreRepairCheckpointer`) on `Store` at `tasks/{task_id}/checkpoints/{phase}` with history pruning, `MAX_CHECKPOINT_BYTES = 240_000`, and transactional lease fencing (`LeaseLost`), while keeping `SqliteRepairCheckpointer` for local/dev.
+- Updated `WorkerService.reap_expired()` to requeue expired `EXECUTE` tasks with a valid checkpoint (`crashResumes` bounded to 2, then `TaskStatus.WORKER_LOST` with sanitized `cannot_fix_with_report` outcome). Added fenced `record_lane_state` and idempotent `record_sandbox` per `(baseSha, diffHash)`.
+- Aligned Adaptive Lanes across resume (A–G): durable `LaneRuntimeState.from_checkpoint` without recomputing triage; compact `preservedEvidence` (`<= 4000` bytes); wall-clock `fast_started_at`/`fast_elapsed_seconds` with downtime sub-deadline escalation (`FAST_BUDGET_EXHAUSTED`); `LANES_POLICY_VERSION = "al.v1"` + `ADAPTIVE_LANES` pinning (mismatch forces `full` lane + `RiskFloor.HIGH`); `is_oracle_evidence_valid` `(base_sha, diff_hash)` check; and per-tool-turn checkpointing in `patch_node`.
+- Retired `run_repair_legacy` (`AGENT_ENGINE=legacy` returns `infra_retry`); preserved `ADAPTIVE_LANES=on|off` rollback switch and `agent/repair.py`.
+- Validation (0 live LLM tokens):
+  - `.venv/Scripts/python.exe -m pytest backend/tests/unit/test_phase_2b_recovery.py -q --tb=short` -> **11 passed in 1.47s**
+  - `.venv/Scripts/python.exe -m pytest backend/tests/unit/test_repair_runner.py backend/tests/unit/test_adaptive_lanes.py backend/tests/unit/test_phase_2a_graph.py -q --tb=short` -> **66 passed in 11.41s**
+  - `.venv/Scripts/python.exe -m pytest --ignore=backend/tests/fixtures -q --tb=short` -> **484 passed, 2 skipped in 128.95s**
 
 ## Remaining work
-- Phase 2B: Firestore checkpoint saver (`FirestoreSaver`) and reaper-driven graph resume across worker hosts.
-- Phase 3+: Strategy router with per-model circuit breakers, import-graph V2 selective pytest, feature/refactor task types, and live evaluation harness.
+- Phase 3: Deterministic failure classifier, strategy router, Argon specialist escalation, and per-model circuit breakers.
+- Phase 4–5: Feature/refactor/config task types, import-graph V2 selective pytest, and live evaluation harness + safety audit.
 
 ## Gotchas
-- `SqliteRepairCheckpointer` must hold `self._lock` (`RLock`) across `put`/`put_writes`/`get_tuple` because LangGraph's `SyncPregelLoop` dispatches checkpoint writes via `BackgroundExecutor` threads.
-- Keep Docker `-c` checker scripts `<= 480` chars (`ExecutionRequest` enforces `<= 500` chars per command arg).
-- Both human approval gates (`awaiting_start`, `awaiting_approval`) remain backend states in `WorkerService`; never use `langgraph.types.interrupt()`.
+- `StoreRepairCheckpointer` and `SqliteRepairCheckpointer` prune to the latest 2 checkpoints per namespace and enforce `RLock` synchronization for LangGraph's `BackgroundExecutor`.
+- Crash resumes (`crashResumes` and `crash_resume` events) do not increment `attempts.used` or append `EscalationReason` entries.
+- Human approval gates (`awaiting_start`, `awaiting_approval`) remain backend states in `WorkerService`; never use `langgraph.types.interrupt()`.

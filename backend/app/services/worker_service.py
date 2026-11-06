@@ -174,11 +174,67 @@ class WorkerService:
 
     # --- Progress -----------------------------------------------------------------------
     def record_sandbox(self, task_id, worker_id, receipt):
-        """Only the trusted execution bridge records actual Docker evidence."""
+        """Only the trusted execution bridge records actual Docker evidence.
+
+        Idempotent per (baseSha, diffHash) and fenced by active lease ownership.
+        """
         def fn(txn):
-            self._owned(txn, task_id, worker_id)
-            txn.update(f"tasks/{task_id}", {"sandboxVerification": receipt})
-        self.store.run_transaction(fn)
+            ctx = self._owned(txn, task_id, worker_id)
+            existing = ctx.task.get("sandboxVerification")
+            new_receipt = dict(receipt)
+            base_sha = str(new_receipt.get("baseSha") or "")
+            diff_hash = str(new_receipt.get("diffHash") or "")
+            if base_sha and diff_hash and not new_receipt.get("receiptId"):
+                new_receipt["receiptId"] = (
+                    "rcpt_" + sha256_hash(f"{base_sha}:{diff_hash}").removeprefix("sha256:")[:16]
+                )
+            if isinstance(new_receipt.get("staticOracleReceipt"), dict):
+                sor = dict(new_receipt["staticOracleReceipt"])
+                if sor.get("baseSha") and sor["baseSha"] != base_sha:
+                    raise ValueError("staticOracleReceipt baseSha must match parent receipt.")
+                if sor.get("diffHash") and sor["diffHash"] != diff_hash:
+                    raise ValueError("staticOracleReceipt diffHash must match parent receipt.")
+                sor.setdefault("receiptId", new_receipt.get("receiptId", ""))
+                new_receipt["staticOracleReceipt"] = sor
+
+            if (
+                isinstance(existing, dict)
+                and existing.get("source") == "docker"
+                and existing.get("passed") is True
+                and new_receipt.get("passed") is True
+                and existing.get("baseSha") == base_sha
+                and existing.get("diffHash") == diff_hash
+            ):
+                if existing.get("receiptId"):
+                    new_receipt["receiptId"] = existing["receiptId"]
+                if existing.get("executionId"):
+                    new_receipt["executionId"] = existing["executionId"]
+                if isinstance(existing.get("staticOracleReceipt"), dict) and isinstance(
+                    new_receipt.get("staticOracleReceipt"), dict
+                ):
+                    esor = existing["staticOracleReceipt"]
+                    if esor.get("verified") is True and esor.get("diffHash") == diff_hash:
+                        new_receipt["staticOracleReceipt"] = dict(esor)
+                txn.update(f"tasks/{task_id}", {"sandboxVerification": new_receipt})
+                return new_receipt
+
+            txn.update(f"tasks/{task_id}", {"sandboxVerification": new_receipt})
+            return new_receipt
+
+        return self.store.run_transaction(fn)
+
+    def record_lane_state(self, task_id: str, worker_id: str, lane_state: dict[str, Any]) -> dict[str, Any]:
+        """Persist compact lane decisions, escalations, and oracle summary under lease fencing."""
+        def fn(txn: Txn) -> dict[str, Any]:
+            ctx = self._owned(txn, task_id, worker_id)
+            prev = ctx.task.get("laneState") or {}
+            if prev.get("lane") == "full" and lane_state.get("lane") == "fast":
+                raise ValueError("Monotonic lane invariant violated: cannot transition full -> fast.")
+            clean = dict(lane_state)
+            txn.update(f"tasks/{task_id}", {"laneState": clean})
+            return clean
+
+        return self.store.run_transaction(fn)
 
     def update_progress(
         self,
@@ -329,6 +385,9 @@ class WorkerService:
                     raise ExecutionLimit(FailureCode.POLICY_VIOLATION)
             txn.set(artifact_path(task_id, "final_diff"), diff_doc)
             txn.set(artifact_path(task_id, "final_tests"), tests_doc)
+            cp_path = f"tasks/{task_id}/checkpoints/execute"
+            if txn.get(cp_path) is not None:
+                txn.set(cp_path, {"threadId": f"{task_id}:execute", "hasCheckpoint": False, "completed": True})
             return apply_change(
                 txn, ctx, self.settings, now,
                 to_status=TaskStatus.AWAITING_APPROVAL,
@@ -438,8 +497,14 @@ class WorkerService:
         return self.store.run_transaction(fn)
 
     # --- Reaper ---------------------------------------------------------------------------
+    def _has_resumable_checkpoint(self, txn: Txn, task_id: str, phase: str) -> bool:
+        cp_doc = txn.get(f"tasks/{task_id}/checkpoints/{phase}")
+        if isinstance(cp_doc, dict) and cp_doc.get("hasCheckpoint") and not cp_doc.get("deleted"):
+            return True
+        return False
+
     def reap_expired(self) -> list[str]:
-        """Mark tasks whose lease expired as `worker_lost` and free the user's slot."""
+        """Requeue expired execute leases with a valid checkpoint, or mark `worker_lost`."""
         now = self.clock()
         reaped: list[str] = []
         for candidate in self.store.list_expired_leases(now, 50):
@@ -460,6 +525,50 @@ class WorkerService:
             apply_change(txn, ctx, self.settings, now, updates=release_lease())
             return False
         phase = _PHASE_FOR_STATUS[status]
+        max_crash_resumes = int((task.get("limits") or {}).get("maxCrashResumes", 2))
+        crash_resumes = int(task.get("crashResumes", 0))
+        has_cp = phase == DispatchPhase.EXECUTE and self._has_resumable_checkpoint(txn, task_id, phase.value)
+        can_resume = (
+            has_cp
+            and not task.get("cancelRequested")
+            and (not task.get("deadlineAt") or now < task["deadlineAt"])
+            and crash_resumes < max_crash_resumes
+        )
+        if can_resume:
+            apply_change(
+                txn, ctx, self.settings, now,
+                to_status=TaskStatus.RUNNING,
+                updates={
+                    "crashResumes": crash_resumes + 1,
+                    "dispatchPending": True,
+                    "dispatchPhase": phase.value,
+                    "failure": None,
+                    **release_lease(),
+                },
+                events=[
+                    EventSpec(
+                        EventType.INFO,
+                        "Worker lease expired; requeued to resume from the last verified checkpoint.",
+                        level=EventLevel.WARN,
+                        data={
+                            "kind": "crash_resume",
+                            "resumeCount": crash_resumes + 1,
+                            "phase": phase.value,
+                        },
+                    )
+                ],
+            )
+            return True
+
+        exhausted_updates: dict[str, Any] = {}
+        if has_cp and crash_resumes >= max_crash_resumes:
+            exhausted_updates["outcome"] = outcome_payload(
+                "cannot_fix_with_report",
+                FailureCode.WORKER_LOST,
+                "The worker stopped responding after automatic checkpoint resume attempts. Run the task again.",
+                [],
+                "Automatic checkpoint resumes ended. Review the incident reference and run the task again.",
+            )
         apply_change(
             txn, ctx, self.settings, now,
             to_status=TaskStatus.WORKER_LOST,
@@ -472,6 +581,7 @@ class WorkerService:
                 },
                 "dispatchPending": False,
                 "dispatchPhase": None,
+                **exhausted_updates,
                 **release_lease(),
             },
             events=[

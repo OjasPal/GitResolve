@@ -32,6 +32,31 @@ _PATCH_CHECKER = (
 )
 
 
+def is_oracle_evidence_valid(
+    oracle: OracleEvidence | dict[str, Any] | None,
+    *,
+    expected_base_sha: str,
+    expected_diff_hash: str,
+) -> bool:
+    """Return True only if checkpointed oracle evidence is verified and matches (base_sha, diff_hash)."""
+    if oracle is None:
+        return False
+    ev = OracleEvidence.from_dict(oracle) if isinstance(oracle, dict) else oracle
+    norm_ev_hash = (ev.diff_hash or "").removeprefix("sha256:")
+    norm_exp_hash = (expected_diff_hash or "").removeprefix("sha256:")
+    return bool(
+        ev.valid_for_fast_lane
+        and ev.original_failed
+        and ev.patched_passed
+        and ev.v0_passed
+        and ev.v1_passed
+        and expected_base_sha
+        and ev.base_sha == expected_base_sha
+        and norm_exp_hash
+        and norm_ev_hash == norm_exp_hash
+    )
+
+
 def build_oracle_command(
     mode: str,
     target_file: str,

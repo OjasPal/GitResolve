@@ -1,13 +1,19 @@
-"""Phase 2A tool-using LangGraph repair execution engine."""
+"""Phase 2A/2B tool-using LangGraph repair execution engine."""
 from app.agent.graph_engine.checkpointer import (
     CheckpointCompatibilityError,
+    FirestoreRepairCheckpointer,
     SqliteRepairCheckpointer,
+    StoreRepairCheckpointer,
     default_checkpoint_db_path,
     make_thread_id,
+    parse_thread_id,
 )
 from app.agent.graph_engine.engine import run_repair_graph
 from app.agent.graph_engine.state import (
     CHECKPOINT_SCHEMA_VERSION,
+    LANES_POLICY_VERSION,
+    MAX_CHECKPOINT_BYTES,
+    MAX_PRESERVED_EVIDENCE_BYTES,
     RepairState,
     configured_budgets,
     get_engine_mode,
@@ -33,10 +39,15 @@ __all__ = [
     "ActionName",
     "CHECKPOINT_SCHEMA_VERSION",
     "CheckpointCompatibilityError",
+    "FirestoreRepairCheckpointer",
+    "LANES_POLICY_VERSION",
+    "MAX_CHECKPOINT_BYTES",
+    "MAX_PRESERVED_EVIDENCE_BYTES",
     "RepairActionArgs",
     "RepairActionEnvelope",
     "RepairState",
     "SqliteRepairCheckpointer",
+    "StoreRepairCheckpointer",
     "ToolExecutionResult",
     "WorkspaceOverlay",
     "configured_budgets",
@@ -45,6 +56,7 @@ __all__ = [
     "get_engine_mode",
     "load_repository_originals",
     "make_thread_id",
+    "parse_thread_id",
     "reduce_attempts",
     "reduce_messages",
     "run_repair_graph",

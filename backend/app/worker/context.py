@@ -91,6 +91,13 @@ class JobContext:
             self.task_id, self.worker_id, attempts_used=attempts_used, budgets=budgets or None
         )
 
+    def record_lane_state(self, lane_state: dict[str, Any]) -> dict[str, Any]:
+        """Persist compact lane decisions, escalations, and oracle summary under lease fencing."""
+        if hasattr(self._svc, "record_lane_state"):
+            return self._svc.record_lane_state(self.task_id, self.worker_id, lane_state)
+        self.checkpoint()
+        return dict(lane_state)
+
     def repository(self):
         """Temporary inert checkout for investigation; never execute code here."""
         from contextlib import contextmanager

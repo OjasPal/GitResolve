@@ -600,11 +600,16 @@ def test_engine_swap_or_schema_mismatch_fails_closed(tmp_path: Path, monkeypatch
 def test_legacy_engine_parity_and_no_graph_interrupt_human_gates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Verify AGENT_ENGINE=legacy remains selectable and human gates remain backend states."""
+    """Verify AGENT_ENGINE=legacy is retired safely in Phase 2B while graph mode preserves parity and backend human gates."""
     from tests.unit.test_repair_runner import FIX, run
 
     monkeypatch.setenv("AGENT_ENGINE", "legacy")
     monkeypatch.setenv("ADAPTIVE_LANES", "off")
+    legacy_outcome, _ = run(tmp_path, [_exec_result(0, "1 passed")])
+    assert legacy_outcome.outcome == "infra_retry"
+    assert legacy_outcome.failure_code == FailureCode.INTERNAL_ERROR
+
+    monkeypatch.setenv("AGENT_ENGINE", "graph")
     outcome, _ = run(tmp_path, [_exec_result(0, "1 passed"), _exec_result(1, "1 failed"), _exec_result(0, "2 passed")])
     assert outcome.outcome == "fix_ready"
     assert outcome.final_diff == FIX

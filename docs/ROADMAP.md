@@ -8,8 +8,8 @@ Reconciled 2026-11-06; branch `agent/workflow-optimization`. Status describes ve
 | 1 | Python repository adaptation and wheel-only environments | done | `dfe0c8c` |
 | 2A speed | Listing/UI responsiveness and execution caches | implemented; validation limits below | `18c6da9` |
 | AL | Shared deterministic adaptive lanes | done (`ADAPTIVE_LANES=on`, 0 unsafe-fast in shadow eval) | `9834328` |
-| 2A graph | Checkpointed model-tool-model repair using shared lanes | done (`AGENT_ENGINE=graph` default, SQLite checkpointer, 14 typed tools) | `feat: tool-using LangGraph repair engine` |
-| 2B | Firestore saver and reaper-driven graph resume | not started | Explicitly deferred |
+| 2A graph | Checkpointed model-tool-model repair using shared lanes | done (`AGENT_ENGINE=graph` default, SQLite checkpointer, 14 typed tools) | `9313144` |
+| 2B | Store/Firestore saver and reaper-driven graph resume | done (`StoreRepairCheckpointer`, reaper resume, durable AL state, `legacy` retired) | HEAD |
 
 ## Phase 0
 
@@ -31,7 +31,7 @@ Reconciled 2026-11-06; branch `agent/workflow-optimization`. Status describes ve
 
 **Validation:** 48 targeted unit tests passed. Eight real Docker fixtures passed in 153.15 seconds. Full suite: 407 passed, 1 failed, 2 Firestore skips in 123.91 seconds. Fixed Windows short-path normalization; 39 affected tests then passed. Full suite was run once, not repeated. Exact commands: [phase-1-validation.md](validation/phase-1-validation.md).
 
-## Phase 2A - partial
+## Phase 2A - complete
 
 ### Speed milestone
 
@@ -59,10 +59,16 @@ Reconciled 2026-11-06; branch `agent/workflow-optimization`. Status describes ve
 8. **Execution speed:** cache immutable prepared envs and eligible baselines by repository/SHA/env/command/verifier. Authorized, bounded background prewarming on selection; overlap with exploration. Combine checks only where gates allow; cheaper safe snapshot copying. Baseline caches never replace patched verification.
 9. **Rollback:** `AGENT_ENGINE=graph|legacy`, engine/schema pinned per phase. Check references before deleting `agent/repair.py` or old state fields: router tests still reference the prototype.
 
-### Still pending
+### Adaptive Lanes (`9834328`) and Tool-Using LangGraph Repair Engine (`9313144`)
 
-STOP A approval, then commit 2 (`AL`) and commit 3 (`2A-graph`). Implement graph-agnostic lane modules behind `ADAPTIVE_LANES`, deterministic oracle/planner and safe static-evidence publication receipts, monotonic escalation and adversarial shadow evaluation. Default lanes on only with zero unsafe-fast cases. Graph nodes must reuse those modules; add StateGraph, SQLite recovery, tools/reducers/budgets and phase-pinned `AGENT_ENGINE`. Run the specified NameError/CSV-export, MCQGen, eligible PrompCraft-shape, escalation, crash and legacy-parity scenarios. Live teammate/browser/tunnel verification remains explicitly unverified; Firestore saver/reaper-resume stays 2B.
+- Implemented shared deterministic Adaptive Lanes (`backend/app/agent/lanes/`: pre-patch `triage_repository`, post-patch `compute_patch_facts` and `plan_verification`, hardened Docker `run_oracle_verification`, monotonic `escalate`, and 17-case adversarial shadow evaluation with 0 unsafe-fast outcomes) behind `ADAPTIVE_LANES=on|off` (default `on`), plus safe static-evidence publication receipts (`record_static_oracle_receipt`) and recoverable `blocked_reason` (`6f1a4f5`).
+- Implemented the tool-using `StateGraph(RepairState)` repair engine (`backend/app/agent/graph_engine/`: `state.py`, `checkpointer.py`, `workspace.py`, `tools.py`, `engine.py`) behind `AGENT_ENGINE=graph|legacy` (default `graph`), integrating `SqliteRepairCheckpointer` (`thread_id=f"{task_id}:{phase}"`, RLock-synchronized, schema `2a.v1` and engine pinning), rehydratable `WorkspaceOverlay`, and 14 typed tools using the Gemini-validated flat `RepairActionEnvelope`.
+- Validated with 15 lane unit tests, 11 Phase 2A graph unit/recovery/real-Docker tests, 22 real Docker/Streamlit gate tests, and full suite (`473 passed, 2 skipped`).
 
-Targets, not measured achievements: end-to-end warm listings around 3 seconds, first real action around 10 seconds after Start, tiny live fixes within minutes. Process cache and scripted fixture measurements do not establish those live targets. No execution graph, checkpoint schema or adaptive lane implementation exists yet.
+## Phase 2B - complete
 
-The 2026-11-06 kickoff supersedes the old “do not change code” checkpoint: implementation and local milestone commits are authorized. No push or merge. STOP A still requires the user's approval after speed/probe/design reporting before implementing AL/graph. The later request to continue after usage limits did not remove that gate.
+- **Compact Store/Firestore Checkpointer (`StoreRepairCheckpointer`):** Stores zlib+base64-encoded, history-pruned checkpoints at `tasks/{task_id}/checkpoints/{phase}` on the existing `Store` (`MemoryStore` / `FirestoreStore`), enforcing `MAX_CHECKPOINT_BYTES = 240_000` (well within Firestore's 1 MiB document limit) and `MAX_PRESERVED_EVIDENCE_BYTES = 4_000`. Keeps `SqliteRepairCheckpointer` for standalone local/dev paths.
+- **Reaper-Driven Recovery & Fencing:** `WorkerService.reap_expired()` inspects expired `EXECUTE` tasks for a valid checkpoint (`hasCheckpoint=True`) and requeues (`status=TaskStatus.RUNNING`, `dispatchPending=True`, `dispatchPhase="execute"`, incrementing bounded `crashResumes` up to `maxCrashResumes=2`) instead of immediately marking `worker_lost`. After 2 crash resumes, transitions to `TaskStatus.WORKER_LOST` with sanitized `cannot_fix_with_report` outcome. Enforces transactional lease fencing (`LeaseLost`) across checkpoint writes, `record_lane_state`, and idempotent `record_sandbox` receipts.
+- **Adaptive Lanes Alignment (A–G):** Reconstructs durable monotonic `LaneRuntimeState` from checkpoint without recomputing triage; tracks wall-clock `fast_started_at` + `fast_elapsed_seconds` across workers/hosts and escalates to `full` (`FAST_BUDGET_EXHAUSTED`) if the 120s sub-deadline expired during downtime; pins `LANES_POLICY_VERSION = "al.v1"` and `ADAPTIVE_LANES` mode (forcing `full` lane + `RiskFloor.HIGH` on mismatch); validates `oracle_evidence` against `(base_sha, diff_hash)` of the rebuilt `WorkspaceOverlay`; and checkpoints each tool turn in `patch_node` so completed model/tool calls and Docker oracle runs are not repeated on resume.
+- **Retired `AGENT_ENGINE=legacy`:** Removed `run_repair_legacy` from `repair_runner.py` (`AGENT_ENGINE=legacy` returns `infra_retry`), while keeping `ADAPTIVE_LANES=on|off` as a rollback switch and preserving `agent/repair.py` for router tests.
+- **Validation:** `test_phase_2b_recovery.py` (**11 passed in 1.47s**, 0 live LLM tokens); targeted unit suite (`test_repair_runner.py`, `test_adaptive_lanes.py`, `test_phase_2a_graph.py`: **66 passed in 11.41s**); full suite once (**484 passed, 2 skipped in 128.95s**).
