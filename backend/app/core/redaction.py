@@ -22,7 +22,7 @@ _PATTERNS += [
 _HOST_PATHS = [
     re.compile(r"(?i)(?<![a-z0-9])[a-z]:[\\/]+[^\r\n'\"<>|]*"),
     re.compile(r"(?<![\w.])/(?:home|Users|tmp|var/tmp|private/tmp|var/folders|private/var/folders)(?:/[^\s'\"<>]*)?"),
-    re.compile(r"\\\\[^\s'\"]+"),
+    re.compile(r"(?i)\\\\(?:Users|home|Windows|AppData|private|tmp|var)[\\\/][^\s'\"]+"),
 ]
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")

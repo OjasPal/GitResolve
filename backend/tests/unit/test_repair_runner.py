@@ -239,3 +239,142 @@ def test_environment_baseline_consumes_zero_attempts(tmp_path, code, text):
 def test_missing_dep_after_proposal_does_not_consume_attempt(tmp_path):
     outcome, ctx = run(tmp_path, [result(0, "1 passed"), result(1, "ModuleNotFoundError: No module named x")])
     assert outcome.outcome == "needs_user_action" and ctx.attempt_count == 0
+
+
+def test_ranked_context_includes_backup_database_in_storage_py_past_line_35(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    filler = "\n".join(f"def helper_{i}(path, file):\n    return f'item-{i}-{{path}}-{{file}}'" for i in range(30))
+    target = (
+        "\ndef backup_database(db_path: str, backup_dir: str) -> str:\n"
+        "    target = backup_dir + '\\\\backup.db'\n"
+        "    return target\n"
+    )
+    (src / "storage.py").write_text(filler + target, encoding="utf-8")
+    (src / "other.py").write_text("def unrelated():\n    return 1\n", encoding="utf-8")
+    issue = "Backup FileNotFoundError (Windows path on Linux): backup_database() in src/storage.py hardcodes backslashes instead of pathlib."
+    ctx_text = repository_context(tmp_path, 40000, issue)
+    assert "src/storage.py" in ctx_text
+    assert "def backup_database" in ctx_text
+    assert "backup.db" in ctx_text
+
+
+def test_blocked_reason_backup_database_recovers_with_referenced_file_context(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    filler = "\n".join(f"def helper_{i}(path):\n    return str(path)\n" for i in range(25))
+    storage_code = (
+        "from pathlib import Path\n"
+        + filler
+        + "def backup_database(backup_dir: str) -> str:\n"
+        + "    return backup_dir + '\\\\backup.db'\n"
+    )
+    (src / "storage.py").write_text(storage_code, encoding="utf-8")
+    first_blocked = EditProposal(
+        explanation="Need full storage.py context",
+        blocked_reason="Need to check where backup_database currently is in src/storage.py",
+    )
+    second_fix = EditProposal(
+        explanation="Use pathlib.Path for cross-platform backup path in backup_database",
+        tests=[{
+            "path": "tests/test_backup_path.py",
+            "content": (
+                "from src.storage import backup_database\n"
+                "def test_backup_database_uses_posix_safe_path():\n"
+                "    assert '\\\\' not in backup_database('/var/backups')\n"
+            ),
+        }],
+        edits=[{
+            "path": "src/storage.py",
+            "old_text": "def backup_database(backup_dir: str) -> str:\n    return backup_dir + '\\\\backup.db'",
+            "new_text": "def backup_database(backup_dir: str) -> str:\n    return str(Path(backup_dir) / 'backup.db')",
+        }],
+    )
+    prompts = []
+    replies = iter([first_blocked, second_fix])
+
+    def route(prompt, **kwargs):
+        prompts.append(prompt)
+        if kwargs.get("schema") is QualityReview:
+            return SimpleNamespace(result=SimpleNamespace(parsed=approved_review()), usage=None, selected_provider="google", selected_model="gemini-3.8-flash")
+        return SimpleNamespace(result=SimpleNamespace(parsed=next(replies)), usage=None, selected_provider="google", selected_model="gemini-3.8-flash")
+
+    task = SimpleNamespace(
+        base_sha="a" * 40,
+        task_id="tsk_backup",
+        limits=LIMITS,
+        issue={
+            "title": "Backup FileNotFoundError (Windows path on Linux)",
+            "body": "backup_database() in src/storage.py hardcodes backslashes instead of pathlib.",
+        },
+        plan={"filesToInspect": ["src/storage.py"]},
+    )
+    ctx = Context(tmp_path, [result(0, "1 passed"), result(1, "1 failed"), result(0, "2 passed")])
+    outcome = run_repair(task, ctx, SimpleNamespace(route_normal=route))
+    assert outcome.outcome == "fix_ready"
+    assert "Path(backup_dir) / 'backup.db'" in outcome.final_diff
+    assert len(prompts) == 3  # initial proposal, bounded recovery proposal, quality review
+    assert "Context recovery: added full source for src/storage.py" in prompts[1]
+    assert "requested full source; line numbered" in prompts[1]
+
+
+@pytest.mark.parametrize(
+    "reason,expected_outcome",
+    [
+        ("Need to check where backup_database currently is in src/storage.py", "needs_clarification"),
+        ("Change requires updating 12 modules across the repository which exceeds maxDiffFiles scope", "out_of_scope"),
+    ],
+)
+def test_persistent_blocked_reason_returns_structured_outcome_never_failed_policy(tmp_path, reason, expected_outcome):
+    from app.services.lifecycle import status_for_failure
+    from app.schemas.enums import TaskStatus
+
+    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    blocked = EditProposal(explanation="Cannot proceed", blocked_reason=reason)
+    calls = []
+
+    def route(prompt, **kwargs):
+        calls.append(prompt)
+        return SimpleNamespace(result=SimpleNamespace(parsed=blocked), usage=None, selected_provider="google", selected_model="gemini-3.8-flash")
+
+    task = SimpleNamespace(
+        base_sha="a" * 40,
+        task_id="tsk_blocked",
+        limits=LIMITS,
+        issue={"title": "Issue", "body": "Fix app.py"},
+        plan={},
+    )
+    ctx = Context(tmp_path, [result(0, "1 passed")])
+    outcome = run_repair(task, ctx, SimpleNamespace(route_normal=route))
+    assert len(calls) == 2  # initial attempt + 1 bounded recovery retry
+    assert outcome.outcome == expected_outcome
+    assert outcome.next_step
+    assert outcome.failure_code != FailureCode.POLICY_VIOLATION
+    assert status_for_failure(outcome.failure_code) != TaskStatus.FAILED_POLICY
+
+
+def test_genuine_policy_violation_still_fails_closed(tmp_path):
+    from app.services.lifecycle import status_for_failure
+    from app.schemas.enums import TaskStatus
+
+    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    forbidden_diff = (
+        "diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml\n"
+        "new file mode 100644\n"
+        "--- /dev/null\n"
+        "+++ b/.github/workflows/ci.yml\n"
+        "@@ -0,0 +1,1 @@\n"
+        "+name: ci\n"
+    )
+    bad_proposal = RepairProposal(explanation="Modify CI workflow", reproduction_diff=TEST, final_diff=TEST + forbidden_diff)
+    router = SimpleNamespace(
+        route_normal=lambda *a, **k: SimpleNamespace(
+            result=SimpleNamespace(parsed=bad_proposal), usage=None, selected_provider="google", selected_model="gemini-3.8-flash"
+        )
+    )
+    task = SimpleNamespace(base_sha="a" * 40, task_id="tsk_policy", limits=LIMITS, issue={"body": "Edit CI"}, plan={})
+    ctx = Context(tmp_path, [result(0, "1 passed")])
+    outcome = run_repair(task, ctx, router)
+    assert outcome.outcome == "failed"
+    assert outcome.failure_code == FailureCode.POLICY_VIOLATION
+    assert status_for_failure(outcome.failure_code) == TaskStatus.FAILED_POLICY
