@@ -7,8 +7,8 @@ Reconciled 2026-11-06; branch `agent/workflow-optimization`. Status describes ve
 | 0 | Safe errors, outcomes, durable persistence and leases | done | `21232ed` |
 | 1 | Python repository adaptation and wheel-only environments | done | `dfe0c8c` |
 | 2A speed | Listing/UI responsiveness and execution caches | implemented; validation limits below | `18c6da9` |
-| AL | Shared deterministic adaptive lanes | done (`ADAPTIVE_LANES=on`, 0 unsafe-fast in shadow eval) | `feat: adaptive lanes` |
-| 2A graph | Checkpointed model-tool-model repair using shared lanes | design ready; awaits AL | Not implemented |
+| AL | Shared deterministic adaptive lanes | done (`ADAPTIVE_LANES=on`, 0 unsafe-fast in shadow eval) | `9834328` |
+| 2A graph | Checkpointed model-tool-model repair using shared lanes | done (`AGENT_ENGINE=graph` default, SQLite checkpointer, 14 typed tools) | `feat: tool-using LangGraph repair engine` |
 | 2B | Firestore saver and reaper-driven graph resume | not started | Explicitly deferred |
 
 ## Phase 0

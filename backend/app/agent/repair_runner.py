@@ -349,7 +349,37 @@ def _declared_package_names(reqs) -> set[str]:
     return names
 
 
-def run_repair(task, ctx, router=None):
+def run_repair(task, ctx, router=None, *, engine=None, checkpointer=None, **kwargs):
+    from app.agent.graph_engine import (
+        CHECKPOINT_SCHEMA_VERSION,
+        CheckpointCompatibilityError,
+        SqliteRepairCheckpointer,
+        get_engine_mode,
+        make_thread_id,
+        run_repair_graph,
+    )
+    mode = get_engine_mode(engine)
+    if mode == "graph":
+        return run_repair_graph(task, ctx, router=router, checkpointer=checkpointer, **kwargs)
+    if checkpointer is not None or os.environ.get("GITRESOLVE_SQLITE_CHECKPOINT_PATH", "").strip():
+        cp = checkpointer or SqliteRepairCheckpointer()
+        try:
+            cp.pin_or_verify_thread(
+                make_thread_id(task.task_id, "execute"),
+                engine_mode="legacy",
+                base_sha=getattr(task, "base_sha", "") or "",
+                schema_version=CHECKPOINT_SCHEMA_VERSION,
+            )
+        except (CheckpointCompatibilityError, ValueError) as exc:
+            return ExecuteResult(
+                "infra_retry",
+                failure_code=FailureCode.INTERNAL_ERROR,
+                failure_message=f"Checkpoint pinned engine mismatch: {redact(str(exc), 200)}",
+            )
+    return run_repair_legacy(task, ctx, router=router)
+
+
+def run_repair_legacy(task, ctx, router=None):
     from agent.router import get_router, AllProvidersFailedError, ModelRouter
     from agent.providers import ProviderError
 
