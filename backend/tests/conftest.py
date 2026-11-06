@@ -78,3 +78,6 @@ def build_env(**settings_overrides) -> Env:
 @pytest.fixture
 def env() -> Env:
     return build_env()
+
+# These repositories contain intentionally failing/uncollectable target code.
+collect_ignore = ["fixtures"]

@@ -42,6 +42,7 @@ def execute(ctx, *, commit_sha: str, command: list[str], patch: str = ""):
         execution_id=ctx.task_id, repo_url=f"https://github.com/{task['repoFullName']}",
         commit_sha=commit_sha, command=command, timeout_seconds=math.floor(remaining), patch=patch,
         max_diff_lines=task["limits"]["maxDiffLines"],
+        prepare_dependencies=getattr(ctx, "prepare_dependencies", False),
         profile=getattr(ctx, "sandbox_profile", "python"), ui_entrypoint=getattr(ctx, "ui_entrypoint", ""),
         require_ui_checks=getattr(ctx, "require_ui_checks", False),
         require_ui_interaction=getattr(ctx, "require_ui_interaction", False),

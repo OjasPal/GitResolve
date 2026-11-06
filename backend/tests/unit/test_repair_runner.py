@@ -41,11 +41,14 @@ def result(code, stdout):
 class Context:
     def __init__(self, root, results):
         self.root, self.results, self.events, self.commands = root, iter(results), [], []
+        self.attempt_count = 0
         self.budgets = {"modelCalls": 1, "inputTokens": 0, "outputTokens": 0}
         self._svc = SimpleNamespace(store=SimpleNamespace(get=lambda path: {"budgets": self.budgets.copy()}))
 
     def checkpoint(self): pass
-    def usage(self, attempts_used=None, **kw): self.budgets.update(kw)
+    def usage(self, attempts_used=None, **kw):
+        self.budgets.update(kw)
+        if attempts_used is not None: self.attempt_count = attempts_used
     def stage(self, stage, **kw): self.events.append(stage)
     def event(self, kind, message): self.events.append(message)
     def artifact(self, *args): pass
@@ -93,7 +96,7 @@ def test_failed_final_tests_cannot_be_claimed_as_a_fix(tmp_path):
 
 def test_missing_dependency_is_not_reproduction_evidence(tmp_path):
     outcome, ctx = run(tmp_path, [result(0, "1 passed"), result(1, "1 failed: ModuleNotFoundError")])
-    assert outcome.outcome == "failed"
+    assert outcome.outcome == "needs_user_action"
     assert len(ctx.commands) == 2
 
 
@@ -170,7 +173,7 @@ def test_technical_recovery_preserves_evidence_and_attempt_budget(tmp_path, monk
     task=SimpleNamespace(base_sha="a"*40,task_id="tsk_test",limits=LIMITS,issue={"body":"Fix addition"},plan={})
     outcome=run_repair(task,ctx)
     assert outcome.failure_code==FailureCode.LLM_UNAVAILABLE and not outcome.final_diff
-    assert ctx.attempts==([1] if fail_evaluation else [])
+    assert ctx.attempts == []
     assert ctx.budgets["modelCalls"]==1+len(calls)
     assert "gemini-4-argon" not in calls
     if fail_evaluation:
@@ -223,3 +226,16 @@ def test_compiled_patch_really_applies_with_new_files_and_missing_newline(tmp_pa
     subprocess.run(["git", "apply", str(patch)], cwd=tmp_path, check=True, capture_output=True)
     assert (tmp_path / "test_new.py").is_file()
     assert "return a + b" in (tmp_path / "calc.py").read_text()
+
+
+@pytest.mark.parametrize("code,text", [(2, "ModuleNotFoundError: No module named x"),
+    (1, "Missing required API key"), (125, "preparation failed"), (2, "ERROR collecting: syntax error")])
+def test_environment_baseline_consumes_zero_attempts(tmp_path, code, text):
+    outcome, ctx = run(tmp_path, [result(code, text)])
+    assert outcome.outcome in {"needs_user_action", "infra_retry"}
+    assert ctx.attempt_count == 0 and ctx.budgets["modelCalls"] == 1
+
+
+def test_missing_dep_after_proposal_does_not_consume_attempt(tmp_path):
+    outcome, ctx = run(tmp_path, [result(0, "1 passed"), result(1, "ModuleNotFoundError: No module named x")])
+    assert outcome.outcome == "needs_user_action" and ctx.attempt_count == 0
