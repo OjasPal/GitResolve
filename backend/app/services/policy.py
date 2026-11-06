@@ -3,10 +3,33 @@ import re
 from pathlib import PurePosixPath
 
 
-def validate_fix(diff: str, limits: dict, evidence: dict, base_sha: str | None, *, require_regression: bool = True, allowed_deletions=()) -> None:
+def validate_fix(
+    diff: str,
+    limits: dict,
+    evidence: dict,
+    base_sha: str | None,
+    *,
+    require_regression: bool = True,
+    allowed_deletions=(),
+    allow_static_oracle: bool = False,
+) -> None:
     if not base_sha or not re.fullmatch(r"[0-9a-f]{40}", base_sha):
         raise ValueError("A pinned base SHA is required.")
-    if not (evidence.get("reproduced") is True and evidence.get("regressionPassed") is True
+    oracle_info = evidence.get("oracle") if isinstance(evidence.get("oracle"), dict) else {}
+    static_ok = (
+        allow_static_oracle
+        and evidence.get("lane") == "fast"
+        and evidence.get("verificationLevel") in {"V0", "V1"}
+        and evidence.get("reproduced") is True
+        and evidence.get("regressionPassed") is True
+        and type(evidence.get("testsRun")) is int
+        and evidence["testsRun"] == 0
+        and evidence.get("newFailures") == []
+        and oracle_info.get("originalFailed") is True
+        and oracle_info.get("patchedPassed") is True
+        and oracle_info.get("validForFastLane") is True
+    )
+    if not static_ok and not (evidence.get("reproduced") is True and evidence.get("regressionPassed") is True
             and type(evidence.get("testsRun")) is int and evidence["testsRun"] > 0
             and evidence.get("newFailures") == []):
         raise ValueError("Passing reproduction, regression and test evidence is required.")

@@ -39,6 +39,9 @@ def public_outcome(doc):
     if doc.get("outcome"):
         return doc["outcome"]
     if doc.get("status") == TaskStatus.AWAITING_APPROVAL:
+        ver = doc.get("verification") or {}
+        if ver.get("lane") == "fast" and ver.get("testsRun") == 0:
+            return outcome_payload("fix_ready", "static_verification_passed", "Static verification passed; review the exact diff before publication.")
         return outcome_payload("fix_ready", "validated_fix", "A validated fix is ready for review.")
     failure = doc.get("failure")
     if failure:

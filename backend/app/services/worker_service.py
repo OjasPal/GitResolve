@@ -325,7 +325,7 @@ class WorkerService:
                 if (receipt.get("source") != "docker" or receipt.get("passed") is not True
                         or receipt.get("diffHash") != sha256_hash(diff_doc["content"])
                         or receipt.get("baseSha") != ctx.task.get("baseSha")
-                        or type(receipt.get("testsRun")) is not int or receipt["testsRun"] <= 0):
+                        or (not ((verification or {}).get("lane") == "fast" and (verification or {}).get("verificationLevel") in {"V0", "V1"} and isinstance(receipt.get("staticOracleReceipt"), dict) and receipt["staticOracleReceipt"].get("verified") is True and receipt["staticOracleReceipt"].get("originalFailed") is True and receipt["staticOracleReceipt"].get("patchedPassed") is True and receipt["staticOracleReceipt"].get("baseSha") == ctx.task.get("baseSha") and receipt["staticOracleReceipt"].get("diffHash") == sha256_hash(diff_doc["content"])) and (type(receipt.get("testsRun")) is not int or receipt["testsRun"] <= 0))):
                     raise ExecutionLimit(FailureCode.POLICY_VIOLATION)
             txn.set(artifact_path(task_id, "final_diff"), diff_doc)
             txn.set(artifact_path(task_id, "final_tests"), tests_doc)
@@ -337,7 +337,7 @@ class WorkerService:
                     "finalDiffHash": sha256_hash(diff_doc["content"]),
                     "finalDiffSummary": summary,
                     "verification": {key: (verification or {}).get(key) for key in
-                                     ("reproduced", "regressionPassed", "testsRun", "newFailures")},
+                                     ("reproduced", "regressionPassed", "testsRun", "newFailures", *tuple(k for k in ("lane", "verificationLevel", "oracle", "timing", "escalations") if k in (verification or {})))},
                     "approval": {"state": ApprovalState.PENDING.value, "by": None, "at": None, "diffHash": None},
                     "dispatchPhase": None,
                     **release_lease(),
