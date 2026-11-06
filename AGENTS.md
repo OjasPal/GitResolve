@@ -3,8 +3,8 @@
 GitResolve investigates Python repository issues, proposes verified repairs, and creates a GitHub PR only after human approval. Prefer low-cost execution and the existing Google GenAI ModelRouter.
 
 ## Session continuity
-- At session start, read `docs/ROADMAP.md` and the latest dated `docs/handoffs/*.md`, then inspect git status. Repository state is authoritative.
-- At session end, write a new dated handoff with branch, working state, validation, remaining work, and gotchas. Never include credentials or private task contents.
+- At session start, read `docs/ROADMAP.md` and `docs/HANDOFF.md`, then inspect git status. Repository state is authoritative.
+- At session end, OVERWRITE `docs/HANDOFF.md` (max 40 lines) with branch, working state, validation, remaining work, and gotchas. Never create new docs, dated handoffs, JSON reports, or design files unless explicitly asked; never edit docs mid-task. Never include credentials or private task contents.
 - Work on `agent/workflow-optimization` unless instructed otherwise. Preserve existing changes; never discard or stash them. Commit per approved milestone. Never push or merge without explicit authorization.
 
 ## Non-negotiable safety
@@ -22,7 +22,7 @@ GitResolve investigates Python repository issues, proposes verified repairs, and
 - `githubapp/`: GitHub authentication/client; `frontend/`: app UI.
 - Speed services: `githubapp/cache.py` and `timing.py`; scoped display caches in `github_real.py`; immutable environment leases in `sandbox/environment.py`; original-only results in `sandbox/baseline_cache.py`; bounded plan-review speculation in `backend/app/worker/prewarm.py`.
 - Never pass baseline cache scope for patched verification. Cached baseline evidence cannot authorize publication. Prepared environments may be reused read-only; execution containers may not.
-- `docs/prompts/AL.md` and `PHASE-2A.md` preserve the prompts; the kickoff amendments and STOP A control sequence. `ADAPTIVE_LANES` and `AGENT_ENGINE` are planned, not implemented at the speed checkpoint. Future lane/graph work must reuse the speed services.
+- `docs/design/` holds `adaptive-lanes-proposal.md` and `phase-2a-graph-design.md`; `docs/validation/` holds validation reports; `docs/archive/` preserves `AL.md`, `PHASE-2A.md`, older handoffs, and raw JSON reports. `ADAPTIVE_LANES` and `AGENT_ENGINE` are planned, not implemented at the speed checkpoint. Future lane/graph work must reuse the speed services.
 
 ## Validation
 From the repository root in PowerShell:

@@ -6,7 +6,7 @@ Reconciled 2026-11-06; branch `agent/workflow-optimization`. Status describes ve
 | --- | --- | --- | --- |
 | 0 | Safe errors, outcomes, durable persistence and leases | done | `21232ed` |
 | 1 | Python repository adaptation and wheel-only environments | done | `dfe0c8c` |
-| 2A speed | Listing/UI responsiveness and execution caches | implemented; validation limits below | `git log -1 --format=%h -- docs/speed-validation.md` |
+| 2A speed | Listing/UI responsiveness and execution caches | implemented; validation limits below | `18c6da9` |
 | AL | Shared deterministic adaptive lanes | proposal ready; awaiting STOP A approval | Not implemented |
 | 2A graph | Checkpointed model-tool-model repair using shared lanes | design ready; awaits AL | Not implemented |
 | 2B | Firestore saver and reaper-driven graph resume | not started | Explicitly deferred |
@@ -19,7 +19,7 @@ Reconciled 2026-11-06; branch `agent/workflow-optimization`. Status describes ve
 
 **Tests added/updated:** `test_workflow_optimization.py`, persistence/recovery tests and router/graph expectations cover credential/path redaction, rollback, cross-process ownership, durable heartbeat/cancel/lease behavior and outcome mappings.
 
-**Validation:** Full run: 337 passed, 3 failed, 27 skipped. Three obsolete expectations were corrected; affected 10-test run passed. Final focused run: 42 passed. Real sandbox/GitHub-Docker run: 57 passed after Docker started. Firestore and then-unavailable ClamAV checks remained unverified. No clean full-suite rerun was claimed. Exact commands: [workflow-optimization.md](workflow-optimization.md).
+**Validation:** Full run: 337 passed, 3 failed, 27 skipped. Three obsolete expectations were corrected; affected 10-test run passed. Final focused run: 42 passed. Real sandbox/GitHub-Docker run: 57 passed after Docker started. Firestore and then-unavailable ClamAV checks remained unverified. No clean full-suite rerun was claimed. Exact commands: [workflow-optimization.md](validation/workflow-optimization.md).
 
 ## Phase 1
 
@@ -29,7 +29,7 @@ Reconciled 2026-11-06; branch `agent/workflow-optimization`. Status describes ve
 
 **Tests added:** Five stdlib/requirements/pyproject/Flask/Streamlit repositories plus missing-dependency, missing-secret and collection-error fixtures. Profiler, unsafe dependency rejection, cache integrity, ranked context, attempt accounting and real prepared-environment tests. Runtime assertions cover denied network and read-only mounts; existing Streamlit AppTest gates remain.
 
-**Validation:** 48 targeted unit tests passed. Eight real Docker fixtures passed in 153.15 seconds. Full suite: 407 passed, 1 failed, 2 Firestore skips in 123.91 seconds. Fixed Windows short-path normalization; 39 affected tests then passed. Full suite was run once, not repeated. Exact commands: [phase-1-validation.md](phase-1-validation.md).
+**Validation:** 48 targeted unit tests passed. Eight real Docker fixtures passed in 153.15 seconds. Full suite: 407 passed, 1 failed, 2 Firestore skips in 123.91 seconds. Fixed Windows short-path normalization; 39 affected tests then passed. Full suite was run once, not repeated. Exact commands: [phase-1-validation.md](validation/phase-1-validation.md).
 
 ## Phase 2A - partial
 
@@ -44,8 +44,8 @@ Reconciled 2026-11-06; branch `agent/workflow-optimization`. Status describes ve
 - Gemini schema probe: union rejected locally; flat action envelope accepted, **199 input / 55 output tokens**, 15.426 s. Graph will use flat args with per-tool post-validation.
 - Full suite once: **428 passed, 2 Firestore skips**. Final gateway error-contract correction followed by **43 affected tests passed**; no repeated full suite. **24** targeted cache/real-Docker tests passed; frontend **5 tests**, lint and build passed.
 - Browser access approval timed out; no browser navigation/hydration/dropdown timing claim. Saved shared backend tunnel unavailable; no successful teammate tunnel comparison. Historical PrompCraft issue 2 run not found for the selected identity.
-- Exact commands, raw results, caveats: [speed-validation.md](speed-validation.md). AL proposal: [adaptive-lanes-proposal.md](adaptive-lanes-proposal.md). Graph design: [phase-2a-graph-design.md](phase-2a-graph-design.md).
-- Prior documentation checkpoint is `e6d9d4e`. The current commit uses the table's `git log` pointer because it cannot contain its own hash. Original prompts are preserved verbatim under `docs/prompts/`.
+- Exact commands, raw results, caveats: [speed-validation.md](validation/speed-validation.md). AL proposal: [adaptive-lanes-proposal.md](design/adaptive-lanes-proposal.md). Graph design: [phase-2a-graph-design.md](design/phase-2a-graph-design.md).
+- Prior documentation checkpoint is `e6d9d4e`. Speed commit is `18c6da9`. Original prompts are preserved verbatim under `docs/archive/`.
 
 ### Approved decisions and sequence
 
