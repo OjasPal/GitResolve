@@ -7,7 +7,8 @@ import { MotionConfig } from "motion/react";
 import { Toaster } from "sonner";
 import { ThemeProvider } from "@/context/ThemeContext";
 import { AuthProvider } from "@/context/AuthContext";
+import { GitHubAuthProvider } from "@/context/GitHubAuthContext";
 export function Providers({ children }: { children: React.ReactNode }) {
  const [client] = useState(() => apiQueryClient);
- return <ThemeProvider><QueryClientProvider client={client}><MotionConfig reducedMotion="user"><AuthProvider><SmoothScroll>{children}</SmoothScroll><Toaster position="bottom-right" toastOptions={{ className: "glass-toast" }} /></AuthProvider></MotionConfig></QueryClientProvider></ThemeProvider>;
+ return <ThemeProvider><QueryClientProvider client={client}><MotionConfig reducedMotion="user"><AuthProvider><GitHubAuthProvider><SmoothScroll>{children}</SmoothScroll><Toaster position="bottom-right" toastOptions={{ className: "glass-toast" }} /></GitHubAuthProvider></AuthProvider></MotionConfig></QueryClientProvider></ThemeProvider>;
 }
