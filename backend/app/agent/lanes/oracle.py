@@ -130,10 +130,27 @@ def run_oracle_verification(
             valid_for_fast_lane=False,
         )
 
+    from sandbox.classification import classify as _classify_sb
+
+    setattr(ctx, "_last_oracle_infra_failure", None)
     orig_cmd = build_oracle_command("orig", target_file, resolved_undef, removed_bound)
     patch_cmd = build_oracle_command("patch", target_file, resolved_undef, removed_bound)
 
     orig_res = ctx.execute(commit_sha=base_sha, command=orig_cmd, patch="")
+    orig_sb_cat = _classify_sb(orig_res)
+    if orig_sb_cat in {"sandbox_prep_failure", "missing_secret", "invalid_dependency_spec"}:
+        setattr(ctx, "_last_oracle_infra_failure", (orig_sb_cat, orig_res))
+        return OracleEvidence(
+            level=VerificationLevel.V0,
+            original_failed=False,
+            patched_passed=False,
+            v0_passed=False,
+            v1_passed=False,
+            base_sha=base_sha,
+            diff_hash=diff_hash,
+            summary=f"Sandbox infrastructure error during V0 oracle: {orig_sb_cat}.",
+            valid_for_fast_lane=False,
+        )
     orig_stdout = getattr(orig_res, "stdout", "") or ""
     orig_failed = (
         getattr(orig_res, "exit_code", None) == 1
@@ -169,6 +186,21 @@ def run_oracle_verification(
     finally:
         ctx.verify_static_oracle = False
         ctx.oracle_original_failed = False
+
+    patch_sb_cat = _classify_sb(patch_res)
+    if patch_sb_cat in {"sandbox_prep_failure", "missing_secret", "invalid_dependency_spec"}:
+        setattr(ctx, "_last_oracle_infra_failure", (patch_sb_cat, patch_res))
+        return OracleEvidence(
+            level=VerificationLevel.V1,
+            original_failed=True,
+            patched_passed=False,
+            v0_passed=False,
+            v1_passed=False,
+            base_sha=base_sha,
+            diff_hash=diff_hash,
+            summary=f"Sandbox infrastructure error during V1 oracle: {patch_sb_cat}.",
+            valid_for_fast_lane=False,
+        )
 
     if getattr(patch_res, "execution_id", None):
         exec_ids.append(patch_res.execution_id)

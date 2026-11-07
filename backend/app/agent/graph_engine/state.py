@@ -1,4 +1,4 @@
-"""Typed RepairState, bounded reducers, and budget/checkpoint validation for Phase 2A/2B."""
+"""Typed RepairState, bounded reducers, and budget/checkpoint validation for Phase 2A/2B/3."""
 from __future__ import annotations
 
 import json
@@ -12,6 +12,7 @@ from app.core.redaction import redact, redact_value
 CHECKPOINT_SCHEMA_VERSION = "2a.v1"
 MAX_CHECKPOINT_BYTES = 240_000
 MAX_PRESERVED_EVIDENCE_BYTES = 4_000
+MAX_SPECIALIST_CALLS_PER_TASK = 2
 
 DEFAULT_MAX_GRAPH_STEPS = 240
 DEFAULT_MAX_TOOL_CALLS = 120
@@ -39,6 +40,7 @@ def configured_budgets(task_limits: dict[str, Any] | None = None) -> dict[str, i
         "maxInputTokens": int(os.environ.get("GITRESOLVE_MAX_INPUT_TOKENS", limits.get("maxInputTokens", DEFAULT_MAX_INPUT_TOKENS))),
         "maxOutputTokens": int(os.environ.get("GITRESOLVE_MAX_OUTPUT_TOKENS", limits.get("maxOutputTokens", DEFAULT_MAX_OUTPUT_TOKENS))),
         "maxStrategies": int(os.environ.get("GITRESOLVE_MAX_STRATEGIES", limits.get("maxRepairAttempts", DEFAULT_MAX_STRATEGIES))),
+        "maxSpecialistCalls": int(os.environ.get("GITRESOLVE_MAX_SPECIALIST_CALLS", limits.get("maxSpecialistCalls", MAX_SPECIALIST_CALLS_PER_TASK))),
     }
 
 
@@ -81,16 +83,22 @@ def reduce_attempts(
     existing: list[dict[str, Any]] | None,
     update: list[dict[str, Any]] | None,
 ) -> list[dict[str, Any]]:
-    """Bounded attempt reducer storing classified failure summaries and artifact references."""
+    """Bounded attempt reducer storing classified failure summaries, evidence, and required strategy changes."""
     combined = list(existing or [])
     for item in update or []:
         if not isinstance(item, dict):
             continue
         clean = redact_value({
             "attempt": int(item.get("attempt", len(combined) + 1)),
-            "category": str(item.get("category", "unknown"))[:64],
+            "fingerprint": str(item.get("fingerprint", ""))[:80],
+            "category": str(item.get("category", "unknown_internal"))[:64],
             "strategy": str(item.get("strategy", ""))[:200],
             "summary": redact(str(item.get("summary", "")), 600),
+            "what_was_tried": redact(str(item.get("what_was_tried", item.get("strategy", ""))), 240),
+            "evidence": redact(str(item.get("evidence", item.get("summary", ""))), 300),
+            "why_it_failed": redact(str(item.get("why_it_failed", item.get("summary", ""))), 260),
+            "rejected_hypothesis": redact(str(item.get("rejected_hypothesis", item.get("strategy", ""))), 240),
+            "required_change": redact(str(item.get("required_change", "")), 300),
             "diff_hash": str(item.get("diff_hash", ""))[:80],
             "artifact_id": str(item.get("artifact_id", ""))[:80],
         })
@@ -100,11 +108,25 @@ def reduce_attempts(
     return combined
 
 
+def reduce_candidates(
+    existing: list[dict[str, Any]] | None,
+    update: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Bounded reducer for best-of-N parallel candidate branches via LangGraph Send."""
+    if update is not None and any(isinstance(x, dict) and x.get("__clear__") for x in update):
+        return [item for item in update if isinstance(item, dict) and not item.get("__clear__")][-2:]
+    combined = list(existing or [])
+    for item in update or []:
+        if isinstance(item, dict) and not item.get("__clear__"):
+            combined.append(item)
+    return combined[-2:]
+
+
 class RepairState(TypedDict):
-    """Durable, bounded LangGraph state for Phase 2A/2B repair execution.
+    """Durable, bounded LangGraph state for Phase 2A/2B/3 repair execution.
 
     Never stores raw repository file contents, full test logs, hidden reasoning,
-    secrets, or host temporary paths.
+    secrets, environmental circuit breaker state, or host temporary paths.
     """
     task_id: str
     phase: str
@@ -148,8 +170,9 @@ class RepairState(TypedDict):
     # Reducers
     messages: Annotated[list[dict[str, Any]], reduce_messages]
     attempt_records: Annotated[list[dict[str, Any]], reduce_attempts]
+    candidate_branches: NotRequired[Annotated[list[dict[str, Any]], reduce_candidates]]
 
-    # Loop & routing control
+    # Loop, strategy router & specialist control
     current_attempt: int
     reproduced: bool
     static_check_passed: bool
@@ -162,6 +185,12 @@ class RepairState(TypedDict):
     recovery_read_triggered: NotRequired[bool]
     patch_loop_done: NotRequired[bool]
     patch_turns_in_attempt: NotRequired[int]
+    specialist_calls_used: NotRequired[int]
+    specialist_advice: NotRequired[str]
+    strategy_action: NotRequired[str]
+    flaky_reruns_used: NotRequired[int]
+    env_prep_retries: NotRequired[int]
+    fast_anchor_retries: NotRequired[int]
 
     # Budget counters & ceilings
     budgets: dict[str, int]
@@ -183,6 +212,9 @@ _FORBIDDEN_STATE_KEYS = frozenset({
     "thought_signature",
     "api_key",
     "private_key",
+    "provider_health",
+    "circuit_breaker",
+    "breaker_state",
 })
 
 _HOST_TEMP_RE = re.compile(
@@ -237,10 +269,12 @@ __all__ = [
     "LANES_POLICY_VERSION",
     "MAX_CHECKPOINT_BYTES",
     "MAX_PRESERVED_EVIDENCE_BYTES",
+    "MAX_SPECIALIST_CALLS_PER_TASK",
     "RepairState",
     "configured_budgets",
     "get_engine_mode",
     "reduce_attempts",
+    "reduce_candidates",
     "reduce_messages",
     "validate_checkpoint_payload",
 ]
