@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { TaskResponse } from "@/types";
-import { approveTask, cancelTask, rejectTask, startTask } from "@/lib/api";
+import { approveTask, cancelTask, createTask, rejectTask, startTask } from "@/lib/api";
 import { AlertTriangle, GitPullRequest, Loader2, Play, RefreshCw, XCircle } from "lucide-react";
 
 interface ActionButtonsProps {
@@ -99,6 +99,23 @@ export function ActionButtons({ task, diffText, planEditing = false, reviewedDif
     router.push(`/tasks/new?repo=${encodeURIComponent(task.repoId)}`);
   };
 
+  const handleRecheck = async () => {
+    try {
+      setLoadingAction("recheck");
+      setError(null);
+      const source =
+        typeof task.issue.number === "number"
+          ? task.issue.number
+          : task.issue.body || task.issue.title || "Re-check after external setup";
+      const created = await createTask(task.repoId, source, `recheck-${task.id}-${Date.now()}`);
+      router.push(`/tasks/${created.id}`);
+    } catch {
+      router.push(`/tasks/new?repo=${encodeURIComponent(task.repoId)}`);
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
   if (task.status === "completed") {
     return task.pr?.url ? <a href={task.pr.url} target="_blank" rel="noopener noreferrer" className="button primary"><GitPullRequest className="w-4 h-4"/>View Pull Request</a> : null;
   }
@@ -134,7 +151,7 @@ export function ActionButtons({ task, diffText, planEditing = false, reviewedDif
         </div>
       )}
 
-      <Dialog.Root open={approvalOpen} onOpenChange={setApprovalOpen}><Dialog.Portal><Dialog.Overlay className="modal-scrim"/><Dialog.Content className="approval-modal" data-lenis-prevent><Dialog.Title>Publish this exact fix?</Dialog.Title><Dialog.Description>Approve the reviewed patch and its recorded evidence. GitResolve will create a branch and a draft pull request. It will never merge it.</Dialog.Description><div className="approval-facts"><div><strong>{task.finalDiffSummary?.filesChanged ?? "—"}</strong>files changed</div><div><strong>+{added ?? task.finalDiffSummary?.linesAdded ?? "—"}</strong>lines added</div><div><strong>−{removed ?? task.finalDiffSummary?.linesRemoved ?? "—"}</strong>lines removed</div></div><p><strong>{task.finalDiffSummary?.commitMessage || "Reviewed repair"}</strong></p><p>Repository: {task.repoFullName}. A unique gitresolve-agent branch is reserved at publication. Test evidence is available in the Tests tab; UI design still needs your visual review.</p><code>{task.finalDiffHash}</code>{error && <p className="inline-error" role="alert">{error}</p>}<div className="actions"><Dialog.Close className="button" disabled={!!loadingAction}>Keep reviewing</Dialog.Close><button className="button primary" onClick={handleApprove} disabled={!!loadingAction || !canApprove}>{loadingAction ? "Creating…" : "Approve & create draft PR"}</button></div></Dialog.Content></Dialog.Portal></Dialog.Root>
+      <Dialog.Root open={approvalOpen} onOpenChange={setApprovalOpen}><Dialog.Portal><Dialog.Overlay className="modal-scrim"/><Dialog.Content className="approval-modal" data-lenis-prevent><Dialog.Title>Publish this exact fix?</Dialog.Title><Dialog.Description>Approve the reviewed patch and its recorded evidence. GitResolve will create a branch and a draft pull request. It will never merge it.</Dialog.Description><div className="approval-facts"><div><strong>{task.finalDiffSummary?.filesChanged ?? "—"}</strong>files changed</div><div><strong>+{added ?? task.finalDiffSummary?.linesAdded ?? "—"}</strong>lines added</div><div><strong>−{removed ?? task.finalDiffSummary?.linesRemoved ?? "—"}</strong>lines removed</div></div><p><strong>{task.finalDiffSummary?.commitMessage || "Reviewed repair"}</strong></p><p>Repository: {task.repoFullName}. A unique gitresolve-agent branch is reserved at publication. Test evidence is available in the Tests tab; UI design still needs your visual review.</p>{task.finalDiffSummary?.setupNote && <div className="p-3 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 text-xs space-y-1"><strong>Setup you must do (included in PR body)</strong><p className="whitespace-pre-wrap">{task.finalDiffSummary.setupNote}</p></div>}<code>{task.finalDiffHash}</code>{error && <p className="inline-error" role="alert">{error}</p>}<div className="actions"><Dialog.Close className="button" disabled={!!loadingAction}>Keep reviewing</Dialog.Close><button className="button primary" onClick={handleApprove} disabled={!!loadingAction || !canApprove}>{loadingAction ? "Creating…" : "Approve & create draft PR"}</button></div></Dialog.Content></Dialog.Portal></Dialog.Root>
       <div className="flex flex-wrap items-center gap-2.5">
         {/* Gate 1: Start Repair Action */}
         {actions.includes("start") && (
@@ -218,8 +235,24 @@ export function ActionButtons({ task, diffText, planEditing = false, reviewedDif
           </button>
         )}
 
+        {/* Re-check Action for External Guidance */}
+        {(actions.includes("recheck") || task.status === "resolved_with_guidance") && (
+          <button
+            onClick={handleRecheck}
+            disabled={!!loadingAction}
+            className="button"
+          >
+            {loadingAction === "recheck" ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <RefreshCw className="w-4 h-4" />
+            )}
+            <span>I&apos;ve done this, re-check</span>
+          </button>
+        )}
+
         {/* Run Again Action */}
-        {actions.includes("run_again") && (task.status.startsWith("failed_") || task.status === "timed_out" || task.status === "worker_lost") && (
+        {actions.includes("run_again") && task.status !== "resolved_with_guidance" && (task.status.startsWith("failed_") || task.status === "timed_out" || task.status === "worker_lost") && (
           <button
             onClick={handleRunAgain}
             className="button"

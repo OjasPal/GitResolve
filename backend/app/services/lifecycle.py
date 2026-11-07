@@ -21,7 +21,7 @@ FAILURE_STATUSES = frozenset(
     }
 )
 TERMINAL_STATUSES = frozenset(
-    {S.COMPLETED, S.NEEDS_INPUT, S.REJECTED, S.CANCELLED} | FAILURE_STATUSES
+    {S.COMPLETED, S.RESOLVED_WITH_GUIDANCE, S.NEEDS_INPUT, S.REJECTED, S.CANCELLED} | FAILURE_STATUSES
 )
 # Terminal statuses that may re-enter creating_pr (only when failure.phase == "pr").
 PR_RETRY_STATUSES = frozenset({S.FAILED_INFRA, S.WORKER_LOST})
@@ -34,7 +34,7 @@ TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
         {S.QUEUED, S.AWAITING_START, S.NEEDS_INPUT, S.FAILED_POLICY, S.FAILED_NOT_REPRODUCED, S.FAILED_NO_FIX, S.CANCELLED, S.FAILED_INFRA, S.WORKER_LOST, S.TIMED_OUT, S.FAILED_BUDGET}
     ),
     S.AWAITING_START: frozenset({S.QUEUED, S.RUNNING, S.CANCELLED}),
-    S.RUNNING: frozenset({S.AWAITING_APPROVAL, S.NEEDS_INPUT, S.CANCELLED} | _RUN_FAILURES),
+    S.RUNNING: frozenset({S.AWAITING_APPROVAL, S.RESOLVED_WITH_GUIDANCE, S.NEEDS_INPUT, S.CANCELLED} | _RUN_FAILURES),
     S.AWAITING_APPROVAL: frozenset({S.RUNNING, S.CREATING_PR, S.REJECTED}),
     S.CREATING_PR: frozenset({S.COMPLETED, S.FAILED_INFRA, S.WORKER_LOST, S.TIMED_OUT}),
     S.FAILED_INFRA: frozenset({S.CREATING_PR}),
@@ -81,6 +81,8 @@ def available_actions(status: str, failure_phase: str | None) -> list[Action]:
         return [Action.APPROVE, Action.REJECT]
     if s == S.CREATING_PR:
         return []
+    if s == S.RESOLVED_WITH_GUIDANCE:
+        return [Action.RECHECK]
     if s in PR_RETRY_STATUSES and failure_phase == "pr":
         return [Action.RETRY_PR, Action.RUN_AGAIN]
     return [Action.RUN_AGAIN]

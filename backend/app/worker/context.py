@@ -129,6 +129,11 @@ class JobContext:
                 self.checkpoint()
         return checkout()
 
+    def prepare_environment(self, deps: list[str] | None = None) -> None:
+        """Mark sandbox execution to prepare/refresh dependencies from declared manifests."""
+        self.prepare_dependencies = True
+        self.checkpoint()
+
     def execute(self, *, commit_sha: str, command: list[str], patch: str = ""):
         from app.worker.sandbox import execute
         from githubapp.timing import measure

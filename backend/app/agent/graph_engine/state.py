@@ -157,6 +157,9 @@ class RepairState(TypedDict):
     plan_ref: NotRequired[dict[str, Any]]
     v2_selection_stats: NotRequired[dict[str, Any]]
     environment_rebuilt: NotRequired[bool]
+    external_evidence: NotRequired[dict[str, Any]]
+    resolution_assessment: NotRequired[dict[str, Any]]
+    placeholder_env_keys: NotRequired[list[str]]
 
     # Investigation & localization state
     hypotheses: list[str]

@@ -47,21 +47,34 @@ from app.agent.interface import ExecuteResult
 from app.agent.lanes import (
     FAST_SUB_DEADLINE_SECONDS,
     EscalationReason,
+    ExternalEvidenceReport,
     LaneName,
     LaneRuntimeState,
     OracleEvidence,
+    ResolutionAssessment,
+    ResolutionAssessmentPayload,
     RiskFloor,
     TaskType,
     VerificationPlan,
     analyze_python_source,
+    apply_resolution_guards,
     apply_unified_diff,
+    assess_resolution_deterministic,
+    build_curated_guidance_outcome,
+    build_missing_dep_guidance_outcome,
+    build_placeholder_env,
     check_fast_budget,
+    collect_external_evidence,
     escalate,
+    external_guidance_enabled,
     is_oracle_evidence_valid,
+    issue_mentions_external_cause,
     plan_verification,
     record_fast_usage,
     run_oracle_verification,
+    should_invoke_resolution_assess,
     triage_repository,
+    validate_placeholder_env,
 )
 from app.agent.repair_runner import (
     EditProposal,
@@ -608,6 +621,13 @@ def run_repair_graph(
         adapter = adapter_for(profile)
         ctx.prepare_dependencies = True
         originals = load_repository_originals(root_path)
+        external_evidence = collect_external_evidence(originals, base_sha=task.base_sha or "")
+        placeholder_env = (
+            validate_placeholder_env(build_placeholder_env(external_evidence))
+            if external_guidance_enabled()
+            else {}
+        )
+        ctx.placeholder_env = dict(placeholder_env)
         if is_resuming and saved_vals_on_entry.get("triage_report"):
             initial_lane_state = LaneRuntimeState.from_checkpoint(
                 saved_vals_on_entry,
@@ -703,6 +723,13 @@ def run_repair_graph(
         "previous_proposal": "",
         "candidate": None,
         "tool_turns_executed_this_run": 0,
+        "external_evidence": external_evidence,
+        "placeholder_env": placeholder_env,
+        "resolution_assessment": (
+            ResolutionAssessment.from_dict(saved_vals_on_entry.get("resolution_assessment"))
+            if is_resuming and isinstance(saved_vals_on_entry.get("resolution_assessment"), dict)
+            else ResolutionAssessment(kind="code_fix")
+        ),
     }
 
     def _maybe_crash(node_name: str) -> None:
@@ -992,6 +1019,124 @@ def run_repair_graph(
 
     # --- Node Definitions ---
 
+    def _current_resolution_assessment(state: RepairState) -> ResolutionAssessment:
+        raw_ra = state.get("resolution_assessment")
+        if isinstance(raw_ra, dict) and raw_ra.get("kind"):
+            return ResolutionAssessment.from_dict(raw_ra)
+        return rt.get("resolution_assessment") or ResolutionAssessment(kind="code_fix")
+
+    def _guidance_execute_result(
+        guidance_outcome: dict[str, Any],
+        *,
+        lane: str,
+        resolution_kind: str = "external_action",
+        final_tests_text: str = "",
+    ) -> ExecuteResult:
+        clean_g = dict(guidance_outcome)
+        clean_g["lane"] = lane
+        what_found = list(clean_g.get("whatWeFound") or [])
+        return ExecuteResult(
+            "resolved_with_guidance",
+            final_tests=final_tests_text,
+            summary={
+                **clean_g,
+                "guidanceOutcome": clean_g,
+                "resolutionKind": resolution_kind,
+                "lane": lane,
+                "whatWeFound": what_found,
+            },
+            verification={
+                "reproduced": False,
+                "regressionPassed": False,
+                "testsRun": 0,
+                "newFailures": [],
+                "lane": lane,
+                "resolutionKind": resolution_kind,
+            },
+            failure_message=str(clean_g.get("title") or "External setup required"),
+            evidence=what_found,
+            next_step=str(clean_g.get("afterYouDoThis") or "Complete the external setup steps above."),
+        )
+
+    def _translate_environment_outcome(cat: str, exec_res: Any, state: RepairState) -> ExecuteResult:
+        lane_str = str(state.get("lane") or "full")
+        if external_guidance_enabled():
+            res_assess = _current_resolution_assessment(state)
+            if cat == "missing_secret" and res_assess.kind in {"external_action", "mixed"}:
+                g_outcome = res_assess.guidance_outcome or build_curated_guidance_outcome(
+                    reason_code=(
+                        res_assess.reason_code
+                        if res_assess.reason_code != "none"
+                        else "external_secret_missing"
+                    ),
+                    provider_key=res_assess.provider_key,
+                    env_vars=res_assess.env_vars or external_evidence.env_var_names[:3],
+                    selected_items=external_evidence.items[:4],
+                    lane=lane_str,
+                )
+                return _guidance_execute_result(
+                    g_outcome,
+                    lane=lane_str,
+                    resolution_kind=res_assess.kind,
+                    final_tests_text=output(exec_res),
+                )
+            if (
+                cat == "missing_dep"
+                and int(state.get("env_prep_retries", 0)) >= 1
+                and callable(getattr(ctx, "prepare_environment", None))
+            ):
+                g_outcome = build_missing_dep_guidance_outcome(
+                    exec_res,
+                    originals,
+                    profile.dependency_files,
+                    lane=lane_str,
+                )
+                return _guidance_execute_result(
+                    g_outcome,
+                    lane=lane_str,
+                    resolution_kind="external_action",
+                    final_tests_text=output(exec_res),
+                )
+        return environment_outcome(cat, exec_res)
+
+    def _translate_blocker_outcome(
+        reason_text: str,
+        state: RepairState,
+        *,
+        is_ask_user: bool = False,
+    ) -> ExecuteResult:
+        lane_str = str(state.get("lane") or "full")
+        if external_guidance_enabled() and not is_ask_user and external_evidence.items:
+            if issue_mentions_external_cause("", reason_text, external_evidence):
+                guarded = apply_resolution_guards(
+                    candidate_kind="external_action",
+                    candidate_reason_code="",
+                    candidate_provider_key="",
+                    requested_env_vars=external_evidence.env_var_names,
+                    requested_refs=[it.ref_str() for it in external_evidence.items],
+                    code_change_requested_by_llm=False,
+                    clarification_question="",
+                    issue_title=str(task.issue.get("title") or ""),
+                    issue_body=f"{task.issue.get('body') or ''}\n{reason_text}",
+                    triage=rt["lane_state"].triage,
+                    evidence=external_evidence,
+                    originals=originals,
+                )
+                if guarded.kind == "external_action" and guarded.guidance_outcome:
+                    return _guidance_execute_result(
+                        guarded.guidance_outcome,
+                        lane=lane_str,
+                        resolution_kind="external_action",
+                    )
+        if is_ask_user:
+            return ExecuteResult(
+                "needs_clarification",
+                failure_code=FailureCode.ISSUE_AMBIGUOUS,
+                failure_message=f"Additional clarification is required: {redact(reason_text, 280)}",
+                next_step="Clarify the expected behavior in the issue description and re-run.",
+            )
+        return _blocked_outcome(reason_text)
+
     def intake_triage_node(state: RepairState) -> dict[str, Any]:
         _maybe_crash("intake_triage")
         ctx.checkpoint()
@@ -1002,6 +1147,8 @@ def run_repair_graph(
             **_sync_lane_state(lane_state),
             "localized_files": list(lane_state.triage.localized_files),
             "declared_deps": declared_deps,
+            "external_evidence": external_evidence.to_dict(),
+            "placeholder_env_keys": sorted(placeholder_env.keys()),
             "budgets": budgets,
         }
 
@@ -1020,6 +1167,186 @@ def run_repair_graph(
             "entrypoint": entrypoint,
             "test_command": list(test_command),
             "budgets": budgets,
+        }
+
+    def resolution_assess_node(state: RepairState) -> dict[str, Any]:
+        _maybe_crash("resolution_assess")
+        ctx.checkpoint()
+        budgets = dict(state["budgets"])
+        budgets["steps"] = budgets.get("steps", 0) + 1
+        if isinstance(state.get("resolution_assessment"), dict) and state["resolution_assessment"].get("kind"):
+            existing_ra = ResolutionAssessment.from_dict(state["resolution_assessment"])
+            rt["resolution_assessment"] = existing_ra
+            return {
+                "budgets": budgets,
+                "external_evidence": external_evidence.to_dict(),
+                "resolution_assessment": existing_ra.to_dict(),
+                "placeholder_env_keys": sorted(placeholder_env.keys()),
+            }
+
+        lane_state: LaneRuntimeState = rt["lane_state"]
+        issue_title = str(task.issue.get("title") or "")
+        issue_body = str(task.issue.get("body") or "")
+
+        if not should_invoke_resolution_assess(issue_title, issue_body, lane_state.triage, external_evidence):
+            no_op = ResolutionAssessment(kind="code_fix")
+            rt["resolution_assessment"] = no_op
+            return {
+                "budgets": budgets,
+                "external_evidence": external_evidence.to_dict(),
+                "resolution_assessment": no_op.to_dict(),
+                "placeholder_env_keys": sorted(placeholder_env.keys()),
+            }
+
+        ra_started = time.perf_counter()
+        det_assessment = assess_resolution_deterministic(
+            issue_title,
+            issue_body,
+            lane_state.triage,
+            external_evidence,
+            originals,
+        )
+        assessment = det_assessment
+        evidence_lines = "\n".join(
+            f"- {it.ref_str()} [{it.kind}] {it.name}: {it.detail}"
+            for it in external_evidence.items[:15]
+        )
+        assess_prompt = (
+            "Assess whether this issue is a pure external setup action ('external_action'), "
+            "a mixed code fix + external setup ('mixed'), a pure repository code change ('code_fix'), "
+            "or ambiguous ('needs_clarification').\n"
+            "CRITICAL RULE: If the issue asks for ANY code behavior change (such as validating an API key, "
+            "returning 401/422 instead of a fallback, catching an exception, or adding a timeout), "
+            "you MUST set code_change_requested=True and kind='mixed' (or 'code_fix'), NEVER 'external_action'.\n"
+            f"Issue Title: {redact(issue_title, 300)}\n"
+            f"Issue Body: {redact(issue_body, 2000)}\n"
+            f"Deterministic Triage task_type_floor: {lane_state.triage.task_type_floor.value}\n"
+            f"Deterministic EvidenceItems in repository:\n{evidence_lines}\n"
+            "Return ResolutionAssessmentPayload."
+        )
+        try:
+            resp, _used_spec, _tel = _invoke_router_normal(
+                assess_prompt,
+                schema=ResolutionAssessmentPayload,
+                system_instruction=(
+                    "You are GitResolve's deterministic resolution classifier. "
+                    "Never classify a request that asks for a code behavior change as pure external_action."
+                ),
+                lane="fast",
+                node="resolution_assess",
+                attempt=0,
+                allow_specialist=False,
+            )
+            parsed_ra = getattr(resp.result, "parsed", None)
+            if not isinstance(parsed_ra, ResolutionAssessmentPayload):
+                raw_ra_txt = str(getattr(resp.result, "raw_text", "") or "")
+                parsed_ra = ResolutionAssessmentPayload.model_validate_json(raw_ra_txt)
+            budgets["resolutionAssessCalls"] = int(budgets.get("resolutionAssessCalls", 0)) + 1
+            _record_router_tokens(budgets, resp)
+            ra_ms = (time.perf_counter() - ra_started) * 1000.0
+            assessment = apply_resolution_guards(
+                candidate_kind=parsed_ra.kind,
+                candidate_reason_code=parsed_ra.reason_code,
+                candidate_provider_key=parsed_ra.provider_key,
+                requested_env_vars=parsed_ra.referenced_env_vars,
+                requested_refs=parsed_ra.referenced_evidence_refs,
+                code_change_requested_by_llm=parsed_ra.code_change_requested,
+                clarification_question=parsed_ra.clarification_question,
+                issue_title=issue_title,
+                issue_body=issue_body,
+                triage=lane_state.triage,
+                evidence=external_evidence,
+                originals=originals,
+                llm_called=True,
+                duration_ms=ra_ms,
+            )
+        except Exception:
+            # Fail-open on timeout, provider error, or mock router returning a non-assessment schema
+            ra_ms = (time.perf_counter() - ra_started) * 1000.0
+            assessment = dc_replace(det_assessment, duration_ms=ra_ms)
+
+        rt["resolution_assessment"] = assessment
+        _safe_event(
+            ctx,
+            EventType.INFO,
+            f"Resolution assessment classified issue as {assessment.kind}.",
+            data={
+                "kind": "resolution_assess",
+                "resolutionKind": assessment.kind,
+                "reasonCode": assessment.reason_code,
+                "llmCalled": assessment.llm_called,
+                "durationMs": round(assessment.duration_ms, 3),
+                "downgradedFrom": assessment.downgraded_from,
+                "guardReasons": list(assessment.guard_reasons),
+            },
+        )
+        if assessment.kind == "needs_clarification":
+            return {
+                "budgets": budgets,
+                "external_evidence": external_evidence.to_dict(),
+                "resolution_assessment": assessment.to_dict(),
+                "placeholder_env_keys": sorted(placeholder_env.keys()),
+                "terminal_outcome": _serialize_execute_result(
+                    ExecuteResult(
+                        "needs_clarification",
+                        failure_code=FailureCode.ISSUE_AMBIGUOUS,
+                        failure_message=assessment.clarification_question,
+                        next_step="Provide the requested clarification and run again.",
+                    )
+                ),
+            }
+        return {
+            "budgets": budgets,
+            "external_evidence": external_evidence.to_dict(),
+            "resolution_assessment": assessment.to_dict(),
+            "placeholder_env_keys": sorted(placeholder_env.keys()),
+        }
+
+    def finalize_guidance_node(state: RepairState) -> dict[str, Any]:
+        _maybe_crash("finalize_guidance")
+        ctx.checkpoint()
+        budgets = dict(state["budgets"])
+        budgets["steps"] = budgets.get("steps", 0) + 1
+        lane_str = str(state.get("lane") or "full")
+        assessment = _current_resolution_assessment(state)
+        g_outcome = assessment.guidance_outcome or build_curated_guidance_outcome(
+            reason_code=(
+                assessment.reason_code
+                if assessment.reason_code != "none"
+                else "external_secret_missing"
+            ),
+            provider_key=assessment.provider_key,
+            env_vars=assessment.env_vars or external_evidence.env_var_names[:3],
+            selected_items=external_evidence.items[:4],
+            lane=lane_str,
+        )
+        steps_txt = "\n".join(
+            f"{idx}. {s.get('text', '')}"
+            for idx, s in enumerate(g_outcome.get("steps") or [], 1)
+        )
+        transcript = (
+            f"EXTERNAL SETUP GUIDANCE ({g_outcome.get('reasonCode')})\n"
+            f"Title: {g_outcome.get('title')}\n"
+            f"Summary: {g_outcome.get('summary')}\n"
+            "What we found:\n"
+            + "\n".join(f"- {w}" for w in (g_outcome.get("whatWeFound") or []))
+            + f"\nSteps:\n{steps_txt}\n"
+        )
+        ctx.artifact("final_tests", ArtifactType.FINAL_TESTS, transcript)
+        _safe_event(
+            ctx,
+            EventType.INFO,
+            str(g_outcome.get("title") or "External setup steps ready."),
+        )
+        res = _guidance_execute_result(
+            g_outcome,
+            lane=lane_str,
+            resolution_kind="external_action",
+            final_tests_text=transcript,
+        )
+        return {
+            "budgets": budgets,
+            "terminal_outcome": _serialize_execute_result(res),
         }
 
     def env_prepare_node(state: RepairState) -> dict[str, Any]:
@@ -1044,8 +1371,11 @@ def run_repair_graph(
                     "strategy_action": "resume_after_env_prepare",
                     "last_failure_category": "",
                 }
+            pending_res = rt.pop("pending_infra_exec_result", None)
             pending_infra = rt.pop("pending_infra_outcome", None)
-            if pending_infra is None:
+            if pending_res is not None:
+                pending_infra = _translate_environment_outcome("missing_dep", pending_res, state)
+            elif pending_infra is None:
                 pending_infra = ExecuteResult(
                     "needs_user_action",
                     failure_code=FailureCode.SANDBOX_ERROR,
@@ -1079,6 +1409,17 @@ def run_repair_graph(
         )
         rt["baseline_result"] = baseline
         b_cat = classify(baseline)
+        if b_cat == "missing_dep" and int(state.get("env_prep_retries", 0)) < 1 and callable(getattr(ctx, "prepare_environment", None)):
+            rt["pending_infra_exec_result"] = baseline
+            rt["pending_infra_outcome"] = environment_outcome(b_cat, baseline)
+            return {
+                "baseline_passed": False,
+                "baseline_category": "missing_dep",
+                "last_failure_category": FailureCategory.ENV_MISSING_DEP.value,
+                "last_failure_summary": output(baseline)[-2000:],
+                "strategy_action": "re_prepare_env",
+                "budgets": budgets,
+            }
         if b_cat in INFRA_CATEGORIES or b_cat == "collection_error":
             ctx.artifact("final_tests", ArtifactType.FINAL_TESTS, output(baseline))
             return {
@@ -1087,7 +1428,7 @@ def run_repair_graph(
                 "baseline_artifact_id": "final_tests",
                 "last_failure_category": classify_failure(output(baseline), exec_result=baseline, stage="baseline"),
                 "budgets": budgets,
-                "terminal_outcome": _serialize_execute_result(environment_outcome(b_cat, baseline)),
+                "terminal_outcome": _serialize_execute_result(_translate_environment_outcome(b_cat, baseline, state)),
             }
         fb = (
             "Original repository failures to repair alongside the request: " + output(baseline)[-8000:]
@@ -1426,7 +1767,7 @@ Approved plan: {task.plan}
                 **_sync_lane_state(lane_state),
                 "last_failure_category": classify_failure(output(sb_res), exec_result=sb_res),
                 "budgets": budgets,
-                "terminal_outcome": _serialize_execute_result(environment_outcome(sb_cat, sb_res)),
+                "terminal_outcome": _serialize_execute_result(_translate_environment_outcome(sb_cat, sb_res, state)),
             }
         lane_state = dc_replace(lane_state, oracle=oracle_ev)
         if not oracle_ev.valid_for_fast_lane:
@@ -1489,7 +1830,7 @@ Approved plan: {task.plan}
                     **_sync_lane_state(lane_state),
                     "last_failure_category": classify_failure(output(sb_res), exec_result=sb_res),
                     "budgets": budgets,
-                    "terminal_outcome": _serialize_execute_result(environment_outcome(sb_cat, sb_res)),
+                    "terminal_outcome": _serialize_execute_result(_translate_environment_outcome(sb_cat, sb_res, state)),
                 }
             lane_state = dc_replace(lane_state, plan=vplan, oracle=oracle_ev)
             if not oracle_ev.valid_for_fast_lane:
@@ -1564,7 +1905,7 @@ Approved plan: {task.plan}
                     **_sync_lane_state(lane_state),
                     "last_failure_category": classify_failure(output(sb_res), exec_result=sb_res),
                     "budgets": budgets,
-                    "terminal_outcome": _serialize_execute_result(environment_outcome(sb_cat, sb_res)),
+                    "terminal_outcome": _serialize_execute_result(_translate_environment_outcome(sb_cat, sb_res, state)),
                 }
             lane_state = dc_replace(lane_state, plan=vplan, oracle=oracle_ev)
             if not oracle_ev.valid_for_fast_lane:
@@ -1858,7 +2199,7 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
                     "baseline_artifact_id": "final_tests",
                     "last_failure_category": classify_failure(output(baseline), exec_result=baseline, stage="baseline"),
                     "budgets": budgets,
-                    "terminal_outcome": _serialize_execute_result(environment_outcome(b_cat, baseline)),
+                    "terminal_outcome": _serialize_execute_result(_translate_environment_outcome(b_cat, baseline, state)),
                 }
             if not passed(baseline):
                 feedback = "Original repository failures to repair alongside the request: " + output(baseline)[-8000:]
@@ -2293,18 +2634,12 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
 
                 if tool_res.terminal_signal == "ask_user":
                     q_str = tool_res.extra.get("question", tool_res.summary)
+                    translated = _translate_blocker_outcome(q_str, state, is_question=True)
                     return {
                         "budgets": budgets,
                         "messages": messages_out,
                         "specialist_calls_used": spec_used,
-                        "terminal_outcome": _serialize_execute_result(
-                            ExecuteResult(
-                                "needs_clarification",
-                                failure_code=FailureCode.ISSUE_AMBIGUOUS,
-                                failure_message=f"Additional clarification is required: {q_str}",
-                                next_step="Clarify the expected behavior in the issue description and re-run.",
-                            )
-                        ),
+                        "terminal_outcome": _serialize_execute_result(translated),
                     }
 
                 if tool_res.terminal_signal == "blocker":
@@ -2313,7 +2648,7 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
                         "budgets": budgets,
                         "messages": messages_out,
                         "specialist_calls_used": spec_used,
-                        "terminal_outcome": _serialize_execute_result(_blocked_outcome(r_str)),
+                        "terminal_outcome": _serialize_execute_result(_translate_blocker_outcome(r_str, state)),
                     }
 
                 if tool_res.terminal_signal == "finish":
@@ -2435,7 +2770,7 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
                             "messages": messages_out,
                             "specialist_calls_used": spec_used,
                             "recovery_read_triggered": blocked_recovered,
-                            "terminal_outcome": _serialize_execute_result(_blocked_outcome(final_reason)),
+                            "terminal_outcome": _serialize_execute_result(_translate_blocker_outcome(final_reason, state)),
                         }
 
                 if isinstance(parsed, RepairProposal):
@@ -2917,7 +3252,8 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
                 repro_cat = classify(reproduction)
                 rt["reproduction_result"] = reproduction
                 if repro_cat == "missing_dep":
-                    rt["pending_infra_outcome"] = environment_outcome(repro_cat, reproduction)
+                    rt["pending_infra_exec_result"] = reproduction
+                    rt["pending_infra_outcome"] = _translate_environment_outcome(repro_cat, reproduction, state)
                     return {
                         "budgets": budgets,
                         "flaky_reruns_used": flaky_reruns,
@@ -2930,7 +3266,7 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
                         "budgets": budgets,
                         "flaky_reruns_used": flaky_reruns,
                         "last_failure_category": classify_failure(output(reproduction), exec_result=reproduction, stage="reproduce"),
-                        "terminal_outcome": _serialize_execute_result(environment_outcome(repro_cat, reproduction)),
+                        "terminal_outcome": _serialize_execute_result(_translate_environment_outcome(repro_cat, reproduction, state)),
                     }
                 char_passed = passed(reproduction) and bool(re.search(r"\b(\d+) passed\b", reproduction.stdout or ""))
                 if not char_passed:
@@ -3044,7 +3380,8 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
             attempt,
         )
         if repro_cat == "missing_dep":
-            rt["pending_infra_outcome"] = environment_outcome(repro_cat, reproduction)
+            rt["pending_infra_exec_result"] = reproduction
+            rt["pending_infra_outcome"] = _translate_environment_outcome(repro_cat, reproduction, state)
             return {
                 "budgets": budgets,
                 "flaky_reruns_used": flaky_reruns,
@@ -3057,7 +3394,7 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
                 "budgets": budgets,
                 "flaky_reruns_used": flaky_reruns,
                 "last_failure_category": classify_failure(output(reproduction), exec_result=reproduction, stage="reproduce"),
-                "terminal_outcome": _serialize_execute_result(environment_outcome(repro_cat, reproduction)),
+                "terminal_outcome": _serialize_execute_result(_translate_environment_outcome(repro_cat, reproduction, state)),
             }
         repro_ok = (
             reproduction.exit_code == 1
@@ -3168,7 +3505,8 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
         ctx.require_ui_checks = False
         rt["final_result"] = final
         if final_cat == "missing_dep":
-            rt["pending_infra_outcome"] = environment_outcome(final_cat, final)
+            rt["pending_infra_exec_result"] = final
+            rt["pending_infra_outcome"] = _translate_environment_outcome(final_cat, final, state)
             return {
                 "budgets": budgets,
                 "flaky_reruns_used": flaky_reruns,
@@ -3183,7 +3521,7 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
                 "flaky_reruns_used": flaky_reruns,
                 "environment_rebuilt": env_rebuilt,
                 "last_failure_category": classify_failure(output(final), exec_result=final, stage="verify"),
-                "terminal_outcome": _serialize_execute_result(environment_outcome(final_cat, final)),
+                "terminal_outcome": _serialize_execute_result(_translate_environment_outcome(final_cat, final, state)),
             }
         tests = re.findall(r"\b(\d+) passed\b", final.stdout or "")
         baseline_res = rt.get("baseline_result")
@@ -3598,6 +3936,13 @@ Return QualityReview."""
         ctx.stage(TaskStage.POLICY_GATE)
 
         rev_dict = state.get("quality_review") or {}
+        res_assess = _current_resolution_assessment(state)
+        placeholder_keys = sorted(placeholder_env.keys())
+        placeholder_note = (
+            f"Verification ran with deterministic placeholder environment values for: {', '.join(placeholder_keys)}"
+            if placeholder_keys
+            else ""
+        )
         if state.get("lane") == "fast":
             lane_state: LaneRuntimeState = rt["lane_state"]
             fast_diff = rt.get("pending_raw_diff") or _rehydrate_overlay(state).implementation_diff()
@@ -3608,6 +3953,7 @@ Return QualityReview."""
             transcript = (
                 "STATIC VERIFICATION PASSED (V0 compile/AST delta + V1 isolated import check in Docker; testsRun=0)\n"
                 + oracle_ev.summary
+                + (f"\nPLACEHOLDER ENV\n{placeholder_note}" if placeholder_note else "")
                 + "\nINDEPENDENT CODE REVIEW (not browser visual verification)\n"
                 + json.dumps(rev_dict, indent=2)
             )
@@ -3620,41 +3966,47 @@ Return QualityReview."""
                 "fastCallsUsed": lane_state.fast_calls_used,
             }
             oracle_dict = oracle_ev.to_dict()
+            fast_summary: dict[str, Any] = {
+                "filesChanged": len(diff_sections(fast_diff)),
+                "linesAdded": sum(
+                    line.startswith("+") and not line.startswith("+++")
+                    for line in fast_diff.splitlines()
+                ),
+                "linesRemoved": sum(
+                    line.startswith("-") and not line.startswith("---")
+                    for line in fast_diff.splitlines()
+                ),
+                "commitMessage": rev_dict.get("commit_message", "fix: resolve issue"),
+                "branchName": rev_dict.get("branch_name", "fix-issue"),
+                "qualityReview": rev_dict,
+                "uiVerification": "Static verification passed (V0/V1 oracle in Docker; no pytest suite executed)"
+                + (f" ({placeholder_note})" if placeholder_note else ""),
+                "lane": LaneName.FAST.value,
+                "verificationLevel": vplan.verification_level.value,
+                "oracle": oracle_dict,
+                "timing": timing_info,
+                "escalations": [],
+            }
+            fast_verification: dict[str, Any] = {
+                "reproduced": True,
+                "regressionPassed": True,
+                "testsRun": 0,
+                "newFailures": [],
+                "lane": LaneName.FAST.value,
+                "verificationLevel": vplan.verification_level.value,
+                "oracle": oracle_dict,
+                "timing": timing_info,
+                "escalations": [],
+            }
+            if placeholder_keys:
+                fast_summary["placeholderEnv"] = placeholder_keys
+                fast_verification["placeholderEnv"] = placeholder_keys
             res = ExecuteResult(
                 "fix_ready",
                 final_diff=fast_diff,
                 final_tests=transcript,
-                summary={
-                    "filesChanged": len(diff_sections(fast_diff)),
-                    "linesAdded": sum(
-                        line.startswith("+") and not line.startswith("+++")
-                        for line in fast_diff.splitlines()
-                    ),
-                    "linesRemoved": sum(
-                        line.startswith("-") and not line.startswith("---")
-                        for line in fast_diff.splitlines()
-                    ),
-                    "commitMessage": rev_dict.get("commit_message", "fix: resolve issue"),
-                    "branchName": rev_dict.get("branch_name", "fix-issue"),
-                    "qualityReview": rev_dict,
-                    "uiVerification": "Static verification passed (V0/V1 oracle in Docker; no pytest suite executed)",
-                    "lane": LaneName.FAST.value,
-                    "verificationLevel": vplan.verification_level.value,
-                    "oracle": oracle_dict,
-                    "timing": timing_info,
-                    "escalations": [],
-                },
-                verification={
-                    "reproduced": True,
-                    "regressionPassed": True,
-                    "testsRun": 0,
-                    "newFailures": [],
-                    "lane": LaneName.FAST.value,
-                    "verificationLevel": vplan.verification_level.value,
-                    "oracle": oracle_dict,
-                    "timing": timing_info,
-                    "escalations": [],
-                },
+                summary=fast_summary,
+                verification=fast_verification,
             )
             return {
                 "budgets": budgets,
@@ -3675,6 +4027,7 @@ Return QualityReview."""
             "BASELINE\n" + (output(baseline_res) if baseline_res else "")
             + "\nREPRODUCTION\n" + (output(repro_res) if repro_res else "")
             + "\nFIXED\n" + (output(final_res) if final_res else "")
+            + (f"\nPLACEHOLDER ENV\n{placeholder_note}" if placeholder_note else "")
             + "\nINDEPENDENT CODE REVIEW (not browser visual verification)\n"
             + json.dumps(rev_dict, indent=2)
         )
@@ -3752,11 +4105,24 @@ Return QualityReview."""
             "branchName": rev_dict.get("branch_name", "fix-issue"),
             "qualityReview": rev_dict,
             "uiVerification": (
-                "Streamlit AppTest and Markdown render checks; visual design requires human review"
-                if state.get("entrypoint")
-                else "Not a detected Streamlit UI repair"
+                (
+                    "Streamlit AppTest and Markdown render checks; visual design requires human review"
+                    if state.get("entrypoint")
+                    else "Not a detected Streamlit UI repair"
+                )
+                + (f" ({placeholder_note})" if placeholder_note else "")
             ),
         }
+        if placeholder_keys:
+            summary_payload["placeholderEnv"] = placeholder_keys
+            verification_payload["placeholderEnv"] = placeholder_keys
+        if res_assess.kind == "mixed" and res_assess.setup_note:
+            summary_payload["setupNote"] = res_assess.setup_note
+            summary_payload["setupNoteHash"] = res_assess.setup_note_hash
+            summary_payload["resolutionKind"] = "mixed"
+            verification_payload["setupNote"] = res_assess.setup_note
+            verification_payload["setupNoteHash"] = res_assess.setup_note_hash
+            verification_payload["resolutionKind"] = "mixed"
         if include_extended_verification:
             summary_payload["taskType"] = effective_task_type
             summary_payload["planRef"] = plan_ref
@@ -3822,6 +4188,8 @@ Return QualityReview."""
     builder = StateGraph(RepairState)
     builder.add_node("intake_triage", intake_triage_node)
     builder.add_node("repo_profile", repo_profile_node)
+    builder.add_node("resolution_assess", resolution_assess_node)
+    builder.add_node("finalize_guidance", finalize_guidance_node)
     builder.add_node("env_prepare", env_prepare_node)
     builder.add_node("baseline_cache", baseline_cache_node)
     builder.add_node("lane_router", lane_router_node)
@@ -3843,14 +4211,32 @@ Return QualityReview."""
 
     builder.set_entry_point("intake_triage")
     builder.add_edge("intake_triage", "repo_profile")
-    builder.add_edge("repo_profile", "env_prepare")
+    builder.add_edge("repo_profile", "resolution_assess")
+    builder.add_conditional_edges(
+        "resolution_assess",
+        lambda s: (
+            "end"
+            if s.get("terminal_outcome")
+            else (
+                "finalize_guidance"
+                if (s.get("resolution_assessment") or {}).get("kind") == "external_action"
+                else "env_prepare"
+            )
+        ),
+        {"end": END, "finalize_guidance": "finalize_guidance", "env_prepare": "env_prepare"},
+    )
+    builder.add_edge("finalize_guidance", END)
     builder.add_conditional_edges(
         "env_prepare",
         lambda s: (
             "end"
             if s.get("terminal_outcome")
             else (
-                ("verify" if s.get("reproduced") else "reproduce")
+                (
+                    "baseline_cache"
+                    if (s.get("baseline_category") == "missing_dep" and not s.get("baseline_passed") and not s.get("overlay_edits"))
+                    else ("verify" if s.get("reproduced") else "reproduce")
+                )
                 if s.get("strategy_action") == "resume_after_env_prepare"
                 else "baseline_cache"
             )
@@ -3860,8 +4246,12 @@ Return QualityReview."""
 
     builder.add_conditional_edges(
         "baseline_cache",
-        lambda s: "end" if s.get("terminal_outcome") else "lane_router",
-        {"end": END, "lane_router": "lane_router"},
+        lambda s: (
+            "end"
+            if s.get("terminal_outcome")
+            else ("env_prepare" if s.get("strategy_action") == "re_prepare_env" else "lane_router")
+        ),
+        {"end": END, "env_prepare": "env_prepare", "lane_router": "lane_router"},
     )
     builder.add_conditional_edges(
         "lane_router",
@@ -4136,6 +4526,9 @@ Return QualityReview."""
             "lane": lane_state.current_lane.value,
             "risk_floor": lane_state.risk_floor.value,
             "triage_report": lane_state.triage.to_dict(),
+            "external_evidence": external_evidence.to_dict(),
+            "resolution_assessment": {},
+            "placeholder_env_keys": sorted(placeholder_env.keys()),
             "plan_ref": plan_ref,
             "verification_plan": None,
             "oracle_evidence": None,

@@ -9,8 +9,9 @@ export type TaskStatus =
   // Human Gates
   | "awaiting_start"
   | "awaiting_approval"
-  // Terminal Success
+  // Terminal Success / Guidance
   | "completed"
+  | "resolved_with_guidance"
   // Terminal Stopped
   | "needs_input"
   | "rejected"
@@ -45,7 +46,8 @@ export type Action =
   | "approve"
   | "reject"
   | "retry_pr"
-  | "run_again";
+  | "run_again"
+  | "recheck";
 
 export type FailureCode =
   | "issue_ambiguous"
@@ -152,6 +154,13 @@ export interface Approval {
   by?: string | null;
   at?: string | null;
   diffHash?: string | null;
+  setupNoteHash?: string | null;
+}
+
+export interface GuidanceFoundItem {
+  path: string;
+  line: number;
+  detail: string;
 }
 
 export interface PullRequestView {
@@ -186,7 +195,12 @@ export interface TaskResponse {
     filesChanged?: number;
     linesAdded?: number;
     linesRemoved?: number;
+    setupNote?: string;
+    setupNoteHash?: string;
+    placeholderEnv?: string[];
+    resolutionKind?: string;
   } | null;
+  verification?: Record<string, unknown> | null;
   approval?: Approval | null;
   failure?: Failure | null;
   result?: Record<string, unknown> | null;

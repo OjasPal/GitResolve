@@ -18,6 +18,7 @@ class TaskStatus(StrEnum):
     AWAITING_APPROVAL = "awaiting_approval"
     # Success
     COMPLETED = "completed"
+    RESOLVED_WITH_GUIDANCE = "resolved_with_guidance"
     # Stopped
     NEEDS_INPUT = "needs_input"
     REJECTED = "rejected"
@@ -116,3 +117,4 @@ class Action(StrEnum):
     REJECT = "reject"
     RETRY_PR = "retry_pr"
     RUN_AGAIN = "run_again"
+    RECHECK = "recheck"

@@ -436,16 +436,28 @@ def _declared_package_names(reqs) -> set[str]:
 
 
 def environment_outcome(category, result):
+    from app.agent.lanes.external_guidance import extract_missing_packages
+
     user_action = category in {"missing_dep", "missing_secret", "invalid_dependency_spec", "collection_error"} or getattr(result, "error_code", "") == "unsupported_dependency"
+    missing_pkgs = extract_missing_packages(result) if category == "missing_dep" or getattr(result, "error_code", "") == "unsupported_dependency" else []
+    pkg_text = f" ({', '.join(missing_pkgs)})" if missing_pkgs else ""
+    err_msg = getattr(result, "error_message", None)
+    messages = {
+        "missing_dep": err_msg or f"Required Python package{pkg_text} is missing from the repository dependency declarations or lacks a supported binary wheel.",
+        "missing_secret": err_msg or "External service credentials are required by the repository tests or runtime configuration.",
+        "collection_error": err_msg or "Pytest could not collect the repository test suite. Check module imports and test configuration.",
+        "invalid_dependency_spec": err_msg or f"Declared dependency{pkg_text} requires a public binary wheel version.",
+    }
     steps = {
-        "missing_dep": "Declare the missing package in the repository dependency files using a binary-wheel-supported version.",
+        "missing_dep": f"Declare the required package{pkg_text} in requirements.txt or pyproject.toml using a binary-wheel-supported version.",
         "missing_secret": "Make tests independent of credentials by mocking external service boundaries or providing a safe test fixture. Never paste keys into the task.",
         "collection_error": "Fix test collection or clarify whether the reported bug is a collection failure before starting repair.",
         "invalid_dependency_spec": "Replace URL, VCS, local or source-build dependencies with supported public wheels.",
     }
+    msg = messages.get(category) or err_msg or "The sandbox test environment could not complete verification."
     return ExecuteResult("needs_user_action" if user_action else "infra_retry",
         failure_code=FailureCode.SANDBOX_ERROR,
-        failure_message=f"Environment check: {category}. " + (getattr(result, "error_message", None) or "Repair attempts were not consumed."),
+        failure_message=msg,
         evidence=["final_tests"], next_step=steps.get(category, "Retry after the execution environment is available."))
 
 

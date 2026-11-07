@@ -110,10 +110,20 @@ class GitHubPullRequestCreator:
                     raise GitHubClientError('branch_conflict') from None
             event('GitHub branch created for the approved diff.')
             checkpoint()
+            summary_doc = task.get('finalDiffSummary') or {}
+            setup_note = str(summary_doc.get('setupNote') or '').strip()
+            setup_section = ''
+            if setup_note:
+                from app.core.redaction import redact
+                expected_setup_hash = approval.get('setupNoteHash') or summary_doc.get('setupNoteHash')
+                if (not expected_setup_hash or sha256_hash(setup_note) != expected_setup_hash
+                        or redact(setup_note) != setup_note or len(setup_note) > 600):
+                    raise PullRequestError(FailureCode.POLICY_VIOLATION, 'Setup note hash mismatch or unredacted setup note.')
+                setup_section = f"\n\n## Setup you must do\n{setup_note}"
             pr = client.request('POST', path + '/pulls', json={
                 'title': subject,
                 'head': branch, 'base': task['defaultBranch'],
-                'body': ((f"Fixes #{task['issue']['number']}\n\n" if task["issue"]["number"] else "") + f"Human-approved diff; Docker tests passed.\n\n{marker}"),
+                'body': ((f"Fixes #{task['issue']['number']}\n\n" if task["issue"]["number"] else "") + f"Human-approved diff; Docker tests passed.{setup_section}\n\n{marker}"),
                 'draft': True,
             })
             return PullRequestResult(pr['number'], pr['html_url'], branch)

@@ -46,11 +46,16 @@ def load_repository_originals(root: Path) -> dict[str, str]:
         except OSError:
             continue
         parts = PurePosixPath(rel).parts
+        is_dotenv_example = (
+            parts[-1].lower() in {".env.example", ".env.sample", ".env.template"}
+            and not any(part.startswith(".") for part in parts[:-1])
+        )
         if any(part.startswith(".") for part in parts):
-            if not (len(parts) == 1 and parts[0] in ALLOWED_CONFIG_PROFILES):
+            if not is_dotenv_example and not (len(parts) == 1 and parts[0] in ALLOWED_CONFIG_PROFILES):
                 continue
         try:
-            originals[rel] = path.read_text(encoding="utf-8")
+            text = path.read_text(encoding="utf-8")
+            originals[rel] = redact(text) if is_dotenv_example else text
         except (UnicodeError, OSError):
             continue
     return originals

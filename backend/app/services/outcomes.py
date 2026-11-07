@@ -3,7 +3,7 @@ from app.schemas.enums import FailureCode, TaskStatus
 from app.core.redaction import redact_value
 
 OUTCOME_CODES = {
-    "needs_user_action": FailureCode.ACCESS_REVOKED,
+    "needs_user_action": FailureCode.SANDBOX_ERROR,
     "needs_clarification": FailureCode.ISSUE_AMBIGUOUS,
     "cannot_reproduce": FailureCode.NOT_REPRODUCED,
     "out_of_scope": FailureCode.POLICY_VIOLATION,
@@ -12,7 +12,8 @@ OUTCOME_CODES = {
 }
 NEXT_STEPS = {
     "fix_ready": "Review the exact diff and approve it before publication.",
-    "needs_user_action": "Restore repository access, then run again.",
+    "resolved_with_guidance": "Complete the external setup steps above, then re-check if needed.",
+    "needs_user_action": "Complete the required setup steps in your environment or repository configuration.",
     "needs_clarification": "Provide reproduction steps and expected behavior.",
     "cannot_reproduce": "Provide a failing example and its environment requirements.",
     "out_of_scope": "Narrow the request to changes allowed by the repository policy.",
@@ -30,9 +31,14 @@ def outcome_for(code):
 def outcome_payload(kind, reason, explanation, evidence=(), next_step=""):
     if kind not in NEXT_STEPS:
         raise ValueError("Unknown structured outcome.")
+    default_next = (
+        "Restore repository access, then run again."
+        if str(reason) == "access_revoked"
+        else NEXT_STEPS[kind]
+    )
     return redact_value({"kind": kind, "reasonCode": str(reason),
         "explanation": explanation, "evidence": list(evidence),
-        "nextStep": next_step or NEXT_STEPS[kind]})
+        "nextStep": next_step or default_next})
 
 
 def public_outcome(doc):

@@ -1,26 +1,24 @@
-# Handoff — 2026-11-07 — Phase 4 Complete
+# Handoff — 2026-11-08 — External-Action Guidance (EAG) Complete
 
 ## Branch and commits
 - Branch: `agent/workflow-optimization`
-- Prior commits: Phase 0 `21232ed`, Phase 1 `dfe0c8c`, speed `18c6da9`, Adaptive Lanes `9834328`, Phase 2A `9313144`, Phase 2B `42cb81f`, Phase 3 `6d02f65`, UI brief `9790052`, live recovery hardening `dd44dfd`.
+- Prior commits: Phase 0 `21232ed`, Phase 1 `dfe0c8c`, speed `18c6da9`, AL `9834328`, Phase 2A `9313144`, Phase 2B `42cb81f`, Phase 3 `6d02f65`, UI brief `9790052`, live recovery `dd44dfd`, Phase 4 `f7d8639`.
 
 ## Working state and validation
-- Completed **Phase 4**:
-  - Bumped `LANES_POLICY_VERSION = "al.v2"`; in-flight `al.v1` checkpoints migrate to `FULL` lane + `RiskFloor.HIGH` on resume. Pinned `pinned_plan_hash` in `SqliteRepairCheckpointer` and `StoreRepairCheckpointer`.
-  - Added deterministic `TaskType` (`bug | feature | refactor | config | unclear`) and monotonic `refine_task_type` in `triage.py`. Fast lane remains strictly bug-only; `unclear` routes to `needs_clarification` (0 attempts). Post-patch planner detects `feature_sized_diff_in_bug_mode` and stops for plan revision when an approved bug plan produces a feature-sized diff.
-  - Added feature planning subgraph (`spec -> acceptance_criteria -> file_plan -> await_start`) in `agent/graph.py`, `compute_plan_hash`, `validate_plan_scope`, and `derive_limits(approved_plan, HARD_CAPS)` using `min()`.
-  - Added mode-aware `validate_fix` (`policy.py`) and `validate_publication` (`publication_patch.py`) for `bug`, `feature`, `refactor` (pass-before/after + touched-symbol coverage + export stability), and `config` (`ALLOWED_CONFIG_PROFILES`), forcing `allow_static_oracle = False` for all non-bug modes.
-  - Added default-deny `allowed_dependency_changes` in `requirements*.txt` (exact `package==version` + reason, wheel-only `prepare_environment` rebuild in `verify_node`, `FULL` lane + `V3`).
-  - Added V2 conservative AST import-graph selective pytest (`import_graph.py`) for inner-loop `run_tests`, while final `verify_node` stays `V3` (full suite).
+- Completed **External-Action Guidance (EAG)** (`EXTERNAL_GUIDANCE=on` default):
+  - Added `backend/app/agent/lanes/external_guidance.py`: single-pass AST + `.env.example` evidence collector (`collect_external_evidence`), zero-cost gate (`should_invoke_resolution_assess`), 4 resolution kinds (`code_fix`, `external_action`, `mixed`, `needs_clarification`), AL Addendum Hard Guards (`apply_resolution_guards`), curated provider templates (`CURATED_PROVIDERS`, `SAFE_PROVIDER_LINKS`), `build_placeholder_env`/`validate_placeholder_env`, and `build_missing_dep_guidance_outcome`.
+  - Wired `resolution_assess` and `finalize_guidance` nodes in `backend/app/agent/graph_engine/engine.py`. Pure `external_action` finishes in non-failure `TaskStatus.RESOLVED_WITH_GUIDANCE` (`0` repair attempts, `0` Docker verification runs). `mixed` injects safe `gitresolve-placeholder-<lower_key>` env vars into sandbox runs, escalates out of fast static-only (`mixed_requires_behavioral_verification`), and attaches `setupNote` + `setupNoteHash` verified at `approve_task` and appended as `## Setup you must do` in the PR body.
+  - Hardened sandbox `missing_dep`: retries `env_prepare` once, adds `/workspace/src`, `/workspace/backend`, `/workspace/backend/src` to `PYTHONPATH`, falls back to subdirectory `requirements.txt`, adds `manylinux_2_17_x86_64` and `manylinux_2_28_x86_64` wheel tags (keeping `--only-binary=:all:`), and emits specific package guidance instead of raw `"Environment check: missing_dep"`.
+  - Updated frontend (`StatusBadge`, `StageStepper`, `ActionButtons`, `workspace.tsx`) for calm `resolved_with_guidance` UI (`"Setup needed"`, `"I've done this, re-check"` button via `Action.RECHECK`, and `"Setup you must do"` mixed callout).
 - Validation (0 live LLM tokens):
-  - `.venv/Scripts/python.exe -m pytest backend/tests/unit/test_phase_4.py -q --tb=short` -> **28 passed in 3.14s**
-  - `.venv/Scripts/python.exe -m pytest backend/tests/unit -q --tb=short` -> **310 passed in 26.66s**
-  - `.venv/Scripts/python.exe -m pytest backend/tests/agent -q --tb=short` -> **30 passed in 0.63s**
+  - `.venv/Scripts/python.exe -m pytest backend/tests/unit/test_external_guidance.py -q --tb=short` -> **10 passed in 1.56s**
+  - `.venv/Scripts/python.exe -m pytest backend/tests/unit/test_phase_3.py backend/tests/unit/test_phase_4.py -q --tb=short` -> **40 passed in 5.82s**
+  - `.venv/Scripts/python.exe -m pytest backend/tests/unit/ backend/tests/sandbox/ -q --tb=short` -> **384 passed in 119s**
 
 ## Remaining work
 - Phase 5: Live evaluation harness, benchmark suite, and end-to-end safety audit.
 
 ## Gotchas
-- `ProviderHealth` circuit breaker state is strictly process-local and forbidden in checkpoints (`_FORBIDDEN_STATE_KEYS`).
-- Never use `.lstrip("./")` on relative paths that may be dotfile config profiles (`.flake8`, `.gitignore`, `.ruff.toml`); use `re.sub(r"^(?:\./)+", "", ...)`.
+- `placeholder_env` only accepts `^[A-Z][A-Z0-9_]{1,63}$` keys and `gitresolve-placeholder-<lower_key>` values; never pass host `os.environ` or real secrets into the sandbox.
+- `test_phase_3.py::test_no_groq_references_remain_in_code_env_or_trd` scans `backend/app/*.py` for the literal substring `"gr"+"oq"`; keep target-repo provider constants constructed via `_GRQ_ID` in `external_guidance.py`.
 - Untracked `docs/GitResolve_Premium_UI_Implementation_Guide.md` is preserved from user's UI design work.

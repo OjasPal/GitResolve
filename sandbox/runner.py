@@ -33,7 +33,7 @@ def _clean_output(raw: bytes | str, max_bytes: int) -> tuple[str, bool]:
 
 
 def _docker_run_args(container: str, repo_dir: Path, command: list[str], patch_path=None, max_diff_lines=150,
-                     profile="python", ui_entrypoint="", require_ui_checks=False, require_ui_interaction=False, require_ui_report=False, require_ui_answers=False, allowed_deletions=(), verify_cleanup=False, prepared_env=None) -> list[str]:
+                     profile="python", ui_entrypoint="", require_ui_checks=False, require_ui_interaction=False, require_ui_report=False, require_ui_answers=False, allowed_deletions=(), verify_cleanup=False, prepared_env=None, placeholder_env=None) -> list[str]:
     args = [
         "docker", "run", "-d", "--pull", "never", "--name", container,
         "--user", "10001:10001", "--network", "none", "--read-only",
@@ -45,6 +45,12 @@ def _docker_run_args(container: str, repo_dir: Path, command: list[str], patch_p
         "--mount", f"type=bind,source={repo_dir},target=/input,readonly",
         "-e", "HOME=/tmp", "-e", f"GITRESOLVE_MAX_DIFF_LINES={max_diff_lines}", "--workdir", "/workspace",
     ]
+    if placeholder_env:
+        for env_key, env_val in sorted(placeholder_env.items()):
+            expected = f"gitresolve-placeholder-{str(env_key).lower()}"
+            if not re.match(r"^[A-Z][A-Z0-9_]{1,63}$", str(env_key)) or str(env_val) != expected:
+                raise ValueError(f"Refusing non-placeholder sandbox env var {env_key!r}")
+            args += ["-e", f"{env_key}={env_val}"]
     if prepared_env:
         args += ["--mount", f"type=volume,source={prepared_env},target=/opt/prepared,readonly",
                  "-e", "PATH=/opt/prepared/bin:/usr/local/bin:/usr/bin:/bin"]
@@ -98,6 +104,8 @@ def run_sandbox(request: ExecutionRequest, allow_local_repo: bool = False, cance
             # The leased immutable volume identifies the actual resolved environment.
             # Rebuild/eviction changes this identity and invalidates the baseline.
             environment_hash = dependency_hash + ':' + (prepared_env or 'image-only')
+            if request.placeholder_env:
+                environment_hash += ':env=' + ','.join(sorted(request.placeholder_env))
             image = 'gitresolve-sandbox:streamlit' if request.profile == 'streamlit' else IMAGE
             inspected = capture(['docker', 'image', 'inspect', '--format', '{{.Id}}', image], deadline, cancel, 4096)
             if inspected.returncode == 0:
@@ -114,7 +122,7 @@ def run_sandbox(request: ExecutionRequest, allow_local_repo: bool = False, cance
             patch_path.chmod(0o644)
         attempted = True
         start = capture(_docker_run_args(container, repo, request.command, patch_path, request.max_diff_lines,
-                        request.profile, request.ui_entrypoint, request.require_ui_checks, request.require_ui_interaction, request.require_ui_report, request.require_ui_answers, request.allowed_deletions, request.verify_cleanup, prepared_env), deadline, cancel, 8192)
+                        request.profile, request.ui_entrypoint, request.require_ui_checks, request.require_ui_interaction, request.require_ui_report, request.require_ui_answers, request.allowed_deletions, request.verify_cleanup, prepared_env, request.placeholder_env), deadline, cancel, 8192)
         if start.returncode:
             raise SandboxError("docker_start_failed", "Docker could not start the sandbox.")
         while True:

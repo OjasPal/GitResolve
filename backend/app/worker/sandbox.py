@@ -49,6 +49,7 @@ def execute(ctx, *, commit_sha: str, command: list[str], patch: str = "", baseli
         require_ui_report=getattr(ctx, "require_ui_report", False),
         require_ui_answers=getattr(ctx, "require_ui_answers", False),
         allowed_deletions=deletion_names, verify_cleanup=bool(patch and deletion_names),
+        placeholder_env=dict(getattr(ctx, "placeholder_env", None) or {}),
     )
     stopped = []
     next_check = 0.0

@@ -72,6 +72,13 @@ def declared_requirements(root, profile):
         for group in ("test", "tests"):
             specs.extend(str(requirement(v)) for v in meta.get("optional-dependencies", {}).get(group, []))
         visited.add(project)
+    if not specs and getattr(profile, "dependency_files", None):
+        for rel_dep in sorted(profile.dependency_files):
+            dep_name = Path(rel_dep).name
+            if dep_name in {"requirements.txt", "requirements-test.txt", "requirements-tests.txt"}:
+                sub_req = root / rel_dep
+                if sub_req.exists():
+                    read_file(sub_req)
     if not specs and any(Path(n).name in {"setup.py", "setup.cfg", "Pipfile", "Pipfile.lock", "poetry.lock"} for n in profile.dependency_files):
         raise DependencyError("This dependency format requires a static requirements export; repository build scripts will not run.")
     digest = hashlib.sha256()

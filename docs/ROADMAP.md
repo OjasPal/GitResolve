@@ -1,6 +1,6 @@
 # GitResolve roadmap
 
-Reconciled 2026-11-06; branch `agent/workflow-optimization`. Status describes verified implementation, not approved intent. Read the latest handoff before resuming.
+Reconciled 2026-11-08; branch `agent/workflow-optimization`. Status describes verified implementation, not approved intent. Read the latest handoff before resuming.
 
 | Phase | Goal | Status | Commit |
 | --- | --- | --- | --- |
@@ -11,7 +11,8 @@ Reconciled 2026-11-06; branch `agent/workflow-optimization`. Status describes ve
 | 2A graph | Checkpointed model-tool-model repair using shared lanes | done (`AGENT_ENGINE=graph` default, SQLite checkpointer, 14 typed tools) | `9313144` |
 | 2B | Store/Firestore saver and reaper-driven graph resume | done (`StoreRepairCheckpointer`, reaper resume, durable AL state, `legacy` retired) | `42cb81f` |
 | 3 | Failure classifier, lane-aware strategy router, Argon specialist, per-model breakers | done (single taxonomy, per-model breakers, Argon reflect node, best-of-N Send) | `6d02f65` |
-| 4 | Task-type triage, feature subgraph, mode-aware verification, scope & dependency permissions, V2 import-graph pytest | done (`LANES_POLICY_VERSION=al.v2`, `TaskType`, feature planning subgraph, mode-aware `validate_fix`, V2 selective pytest) | HEAD |
+| 4 | Task-type triage, feature subgraph, mode-aware verification, scope & dependency permissions, V2 import-graph pytest | done (`LANES_POLICY_VERSION=al.v2`, `TaskType`, feature planning subgraph, mode-aware `validate_fix`, V2 selective pytest) | `f7d8639` |
+| EAG | External-action guidance (`resolved_with_guidance`, mixed `setupNote`, placeholder env, missing-dep guidance) | done (`EXTERNAL_GUIDANCE=on`, 4 resolution kinds, AL Hard Guards, `recheck` action) | HEAD |
 
 ## Phase 0
 
@@ -92,3 +93,12 @@ Reconciled 2026-11-06; branch `agent/workflow-optimization`. Status describes ve
 - **Per-Task Scope & Dependency Permissions:** Pure `derive_limits(approved_plan, HARD_CAPS)` using `min()`. Default-deny `allowed_dependency_changes` permits exact `package==version` pins + reason only in `requirements*.txt`, triggers wheel-only `ctx.prepare_environment` rebuild in `verify_node`, forces `FULL` lane + `V3`, and rejects URLs/VCS/options/ranges/removals/typosquats and `pyproject.toml`/`setup.py`.
 - **V2 Conservative AST Import-Graph Selective Pytest (`backend/app/agent/lanes/import_graph.py`):** Maps `changed_modules -> transitive dependents -> test_*.py` for inner-loop `run_tests`, falling back to full suite on dynamic imports, `conftest.py` hooks/plugins, non-`.py` edits, syntax errors, or unresolved relative imports; final verification gate stays `V3` (full suite).
 - **Validation:** `test_phase_4.py` (**28 passed in 3.14s**, 0 live LLM tokens); full `backend/tests/unit` (**310 passed in 26.66s**); `backend/tests/agent` (**30 passed in 0.63s**).
+
+## External-Action Guidance (EAG) - complete
+
+- **Deterministic External Evidence & Zero-Cost Gate (`backend/app/agent/lanes/external_guidance.py`):** Single-pass AST + config collector (`collect_external_evidence`) extracts `os.getenv`, `os.environ`, `BaseSettings`, `st.secrets`, `.env.example`, provider SDK imports, webhook routes, and HMAC checks into grounded `EvidenceItem` records (`file:line`), cached by `(base_sha, content_digest)`. Zero-cost gate (`should_invoke_resolution_assess`) skips LLM calls with 0 tokens and <5 ms when no external evidence + signal is present.
+- **Four Resolution Kinds & Hard Guards (`code_fix | external_action | mixed | needs_clarification`):** Enforces AL Addendum Hard Guards (`apply_resolution_guards`): `external_action` is forbidden when AL triage finds `undefined_names`/tracebacks, when `task_type_floor` is `feature`/`refactor`/`unclear`, when the issue asks for a code behavior change (`issue_requests_code_behavior_change`), or when identifiers are not grounded in `EvidenceItem`s. Curated `CURATED_PROVIDERS` templates and `SAFE_PROVIDER_LINKS` prevent model-invented URLs or shell commands.
+- **Non-Failure Terminal Guidance Status (`TaskStatus.RESOLVED_WITH_GUIDANCE`):** Added `resolved_with_guidance`, `Action.RECHECK`, `WorkerService.complete_guidance()`, and calm frontend guidance cards (`StatusBadge` accent `"Setup needed"`, non-failed `StageStepper`, quiet `"I've done this, re-check"` button, no `"Run again"`, no red/error styling, no raw `"missing_dep"` labels).
+- **Mixed Resolution & Placeholder Sandbox Env:** Injects deterministic `gitresolve-placeholder-<lower_key>` values (`validate_placeholder_env`) into sandbox executions, includes sorted `placeholder_env_keys` in baseline cache and environment hashes, escalates `mixed` out of fast static-only verification (`mixed_requires_behavioral_verification`), and attaches `setupNote` + `setupNoteHash` verified at `approve_task` and rendered under `## Setup you must do` in the PR body.
+- **Missing-Dep Hardening:** Retries `env_prepare` once on `missing_dep`, adds `/workspace/src`, `/workspace/backend`, `/workspace/backend/src` to sandbox `PYTHONPATH`, falls back to subdirectory `requirements.txt`, adds `manylinux_2_17_x86_64` / `manylinux_2_28_x86_64` wheel tags alongside `manylinux2014_x86_64` (keeping `--only-binary=:all:`), and translates unresolvable missing packages into specific `external_dependency_unsupported` guidance naming the exact package and import location.
+- **Validation:** `test_external_guidance.py` (**10 passed in 1.56s**, 0 live LLM tokens); full `backend/tests/unit` + `backend/tests/sandbox` (**384 passed in 34s**, 0 live LLM tokens); TypeScript `tsc --noEmit` (0 errors in `src/`).

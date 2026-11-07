@@ -77,11 +77,14 @@ def run_oracle_verification(
     originals: dict[str, str],
     publishable_diff: str,
     plan: VerificationPlan,
+    placeholder_env: dict[str, str] | None = None,
 ) -> OracleEvidence:
     """Run V0 + V1 oracle checks on original and patched snapshots in fresh Docker containers.
 
     Never trusts model self-attestation; requires sandbox-produced markers and exit codes.
     """
+    if placeholder_env is not None:
+        ctx.placeholder_env = dict(placeholder_env)
     facts = plan.patch_facts
     diff_hash = sha256_hash(publishable_diff)
     if len(facts.touched_files) != 1 or not facts.non_import_ast_unchanged:
