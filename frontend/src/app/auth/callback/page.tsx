@@ -23,7 +23,17 @@ export default function GitHubCallback() {
     }
     localStorage.setItem("gitresolve_session_owner", user.uid);
     setAuthToken(token);
-    router.replace("/dashboard");
+    let target = "/dashboard";
+    try {
+      const pending = sessionStorage.getItem("gitresolve_pending_redirect");
+      if (pending && pending !== "/dashboard" && pending.startsWith("/")) {
+        sessionStorage.removeItem("gitresolve_pending_redirect");
+        target = pending;
+      }
+    } catch {
+      // ignore storage errors
+    }
+    router.replace(target);
   }, [user, loading, router]);
   return <div className="py-20 text-center space-y-4"><p role={error ? "alert" : "status"}>{error || "Completing GitHub authorization..."}</p>{error && <Link href="/dashboard" className="underline">Return to dashboard</Link>}</div>;
 }

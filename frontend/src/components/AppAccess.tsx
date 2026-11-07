@@ -15,7 +15,7 @@ export function AppAccess({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const publicPage = ["/", "/login", "/register", "/reset-password", "/auth/callback"].includes(path);
+  const isPublicOrSettings = ["/", "/login", "/register", "/reset-password", "/auth/callback", "/settings"].includes(path);
   const appUrl = process.env.NEXT_PUBLIC_GITHUB_APP_URL;
 
   const verify = useCallback(async () => {
@@ -40,14 +40,14 @@ export function AppAccess({ children }: { children: React.ReactNode }) {
   }, [user]);
 
   useEffect(() => {
-    if (!loading && !user && !publicPage) router.replace(`/login?redirect=${encodeURIComponent(path)}`);
-    const timer = setTimeout(() => { if (user && !publicPage) void verify(); }, 0);
+    if (!loading && !user && !isPublicOrSettings) router.replace(`/login?redirect=${encodeURIComponent(path)}`);
+    const timer = setTimeout(() => { if (user && !isPublicOrSettings) void verify(); }, 0);
     const onChange = () => { if (!getAuthToken()) setReady(false); };
     window.addEventListener("auth_change", onChange);
     return () => { clearTimeout(timer); window.removeEventListener("auth_change", onChange); };
-  }, [loading, user, publicPage, path, router, verify]);
+  }, [loading, user, isPublicOrSettings, path, router, verify]);
 
-  if (publicPage) return children;
+  if (isPublicOrSettings) return children;
   if (loading || !user || checking) return <div className="py-24 flex justify-center gap-2" role="status"><Loader2 className="animate-spin w-5 h-5" />Checking account access...</div>;
   if (ready) return children;
 
