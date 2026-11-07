@@ -1266,10 +1266,39 @@ def run_repair_graph(
             assessment = dc_replace(det_assessment, duration_ms=ra_ms)
 
         rt["resolution_assessment"] = assessment
+        if assessment.kind == "mixed" and assessment.setup_note:
+            try:
+                ctx._svc.update_progress(
+                    task.task_id,
+                    ctx.worker_id,
+                    fields={
+                        "finalDiffSummary": {
+                            "setupNote": assessment.setup_note,
+                            "setupNoteHash": assessment.setup_note_hash,
+                            "whatWeFound": list(assessment.what_we_found),
+                            "resolutionKind": "mixed",
+                            "providerKey": assessment.provider_key,
+                            "envVars": list(assessment.env_vars),
+                        },
+                        "verification": {
+                            "setupNote": assessment.setup_note,
+                            "setupNoteHash": assessment.setup_note_hash,
+                            "whatWeFound": list(assessment.what_we_found),
+                            "resolutionKind": "mixed",
+                        },
+                    },
+                )
+            except Exception:
+                pass
         _safe_event(
             ctx,
             EventType.INFO,
-            f"Resolution assessment classified issue as {assessment.kind}.",
+            (
+                f"Resolution assessment classified issue as {assessment.kind}. "
+                f"External setup note prepared for {', '.join(assessment.env_vars)}."
+                if (assessment.kind == "mixed" and assessment.env_vars)
+                else f"Resolution assessment classified issue as {assessment.kind}."
+            ),
             data={
                 "kind": "resolution_assess",
                 "resolutionKind": assessment.kind,
@@ -1278,6 +1307,8 @@ def run_repair_graph(
                 "durationMs": round(assessment.duration_ms, 3),
                 "downgradedFrom": assessment.downgraded_from,
                 "guardReasons": list(assessment.guard_reasons),
+                "setupNote": assessment.setup_note,
+                "whatWeFound": list(assessment.what_we_found),
             },
         )
         if assessment.kind == "needs_clarification":

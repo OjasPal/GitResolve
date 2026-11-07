@@ -403,10 +403,23 @@ function TaskWorkspaceContent() {
 
         {/* Mixed Resolution Setup Note if applicable */}
         {(task.finalDiffSummary?.setupNote || (typeof task.verification?.setupNote === "string" && task.verification.setupNote)) && (
-          <div className="p-3.5 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 text-xs space-y-1.5" role="note">
-            <p className="font-semibold text-neutral-900 dark:text-neutral-100">
-              Setup you must do
-            </p>
+          <div className="p-3.5 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 text-xs space-y-2" role="note">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-neutral-700 dark:text-neutral-200" />
+              <p className="font-semibold text-neutral-900 dark:text-neutral-100">
+                Setup you must do outside the codebase
+              </p>
+            </div>
+            {Array.isArray(task.finalDiffSummary?.whatWeFound) && (task.finalDiffSummary.whatWeFound as string[]).length > 0 && (
+              <div className="font-mono text-[11px] text-neutral-600 dark:text-neutral-400 space-y-0.5">
+                {(task.finalDiffSummary.whatWeFound as string[]).map((item, i) => (
+                  <div key={i} className="flex items-center gap-1.5">
+                    <FileCode className="w-3.5 h-3.5 shrink-0 text-neutral-400" />
+                    <span className="text-neutral-900 dark:text-neutral-100">{item}</span>
+                  </div>
+                ))}
+              </div>
+            )}
             <p className="text-neutral-700 dark:text-neutral-300 whitespace-pre-wrap leading-relaxed">
               {renderTextWithSafeLinks(String(task.finalDiffSummary?.setupNote || task.verification?.setupNote))}
             </p>

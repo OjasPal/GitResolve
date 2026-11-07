@@ -54,7 +54,16 @@ class ExecutionLimit(Exception):
         super().__init__(code.value)
 
 # Structured fields a worker may set through `update_progress`.
-PROGRESS_FIELDS = frozenset({"baseSha", "testCommand", "baseline", "reproduction", "cleanupScope"})
+PROGRESS_FIELDS = frozenset({
+    "baseSha",
+    "testCommand",
+    "baseline",
+    "reproduction",
+    "cleanupScope",
+    "finalDiffSummary",
+    "verification",
+    "result",
+})
 _PHASE_FOR_STATUS = {
     TaskStatus.PLANNING: DispatchPhase.PLAN,
     TaskStatus.RUNNING: DispatchPhase.EXECUTE,

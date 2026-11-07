@@ -320,6 +320,43 @@ def _is_valid_env_var_candidate(name: str) -> bool:
     )
 
 
+_CREDENTIAL_ENV_TOKEN_RE = re.compile(
+    r"(?:^|_)(?:KEY|APIKEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|CREDENTIALS|AUTH|BEARER|WEBHOOK|HMAC|SIGNING|PRIVATE|CLIENT_ID|CLIENT_SECRET)(?:$|_)",
+    re.IGNORECASE,
+)
+
+
+def _is_credential_env_name(name: str) -> bool:
+    """Return True when an environment variable name represents an external key, secret, token, or credential."""
+    if not _is_valid_env_var_candidate(name):
+        return False
+    upper = name.upper()
+    if upper.endswith(("_MINUTES", "_SECONDS", "_DAYS", "_HOURS", "_SIZE", "_OVERLAP", "_MB", "_KB", "_BYTES", "_COUNT", "_LIMIT", "_CONCURRENCY", "_PORT", "_TIMEOUT", "_RETRIES")):
+        return False
+    if _CREDENTIAL_ENV_TOKEN_RE.search(upper):
+        return True
+    inferred = _infer_provider_from_env_name(upper)
+    if inferred and any(tok in upper for tok in ("KEY", "SECRET", "TOKEN", "AUTH", "CREDENTIAL", "ID", "URI", "URL")):
+        return True
+    return False
+
+
+def _annotation_allows_string(annotation: ast.AST | None) -> bool:
+    """Return False when a BaseSettings type annotation is numeric/boolean/list/dict (e.g. int, float, bool)."""
+    if annotation is None:
+        return True
+    try:
+        ann_src = ast.unparse(annotation)
+    except Exception:
+        return True
+    tokens = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", ann_src))
+    if "str" in tokens or "SecretStr" in tokens or "Any" in tokens:
+        return True
+    if tokens & {"int", "float", "bool", "list", "dict", "set", "tuple", "Decimal", "Path"}:
+        return False
+    return True
+
+
 def _extract_string_constant(node: ast.AST | None) -> str | None:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
@@ -390,6 +427,8 @@ class _ExternalEvidenceVisitor(ast.NodeVisitor):
                     field_name = stmt.target.id
                     if field_name.startswith("_") or field_name == "model_config":
                         continue
+                    if not _annotation_allows_string(stmt.annotation):
+                        continue
                     candidate_env = field_name.upper()
                     if isinstance(stmt.value, ast.Call):
                         for kw in stmt.value.keywords:
@@ -397,7 +436,7 @@ class _ExternalEvidenceVisitor(ast.NodeVisitor):
                                 kw_str = _extract_string_constant(kw.value)
                                 if kw_str and _is_valid_env_var_candidate(kw_str.upper()):
                                     candidate_env = kw_str.upper()
-                    if _is_valid_env_var_candidate(candidate_env):
+                    if _is_credential_env_name(candidate_env):
                         self._add(
                             stmt.lineno,
                             "env_var",
@@ -660,9 +699,10 @@ def collect_external_evidence(
 def build_placeholder_env(
     evidence: ExternalEvidenceReport | Iterable[str] | None,
 ) -> dict[str, str]:
-    """Generate deterministic non-secret placeholder env values for discovered env vars.
+    """Generate deterministic non-secret placeholder env values for discovered credential env vars.
 
-    Never reads from host os.environ or any .env file.
+    Never reads from host os.environ or any .env file, and never overwrites
+    numeric/non-credential application settings (e.g. int timeouts or chunk sizes).
     """
     if evidence is None:
         return {}
@@ -673,7 +713,7 @@ def build_placeholder_env(
         names = evidence
     out: dict[str, str] = {}
     for raw in sorted({str(n).strip() for n in names if n}):
-        if _is_valid_env_var_candidate(raw):
+        if _is_credential_env_name(raw):
             out[raw] = f"{PLACEHOLDER_PREFIX}{raw.lower()}"
     return out
 

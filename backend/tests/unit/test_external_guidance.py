@@ -924,3 +924,39 @@ def test_lifecycle_reaper_and_fast_lane_zero_cost_gate(tmp_path: Path) -> None:
         issue_text="F821 undefined name 'math' in src/mod_0.py",
     )
     assert should_invoke_resolution_assess("NameError in src/mod_0.py", "F821 undefined name", triage, ev) is False
+
+
+def test_basesettings_numeric_fields_not_polluted_by_placeholder_env() -> None:
+    originals = {
+        "backend/config.py": (
+            "from pydantic_settings import BaseSettings\n\n"
+            "class Settings(BaseSettings):\n"
+            "    PROJECT_NAME: str = 'NexusMind'\n"
+            "    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30\n"
+            "    REFRESH_TOKEN_EXPIRE_DAYS: int = 7\n"
+            "    DEFAULT_CHUNK_SIZE: int = 512\n"
+            "    DEFAULT_CHUNK_OVERLAP: int = 50\n"
+            "    MAX_FILE_SIZE_MB: int = 25\n"
+            "    WORKER_CONCURRENCY: int = 4\n"
+            "    GROQ_API_KEY: str = ''\n"
+            "    GEMINI_API_KEY: str = ''\n"
+            "    JWT_SECRET_KEY: str = 'dev'\n"
+        ),
+    }
+    ev = collect_external_evidence(originals, base_sha="f" * 40)
+    placeholders = build_placeholder_env(ev)
+    assert "GROQ_API_KEY" in placeholders
+    assert "GEMINI_API_KEY" in placeholders
+    assert "JWT_SECRET_KEY" in placeholders
+    for numeric_field in (
+        "ACCESS_TOKEN_EXPIRE_MINUTES",
+        "REFRESH_TOKEN_EXPIRE_DAYS",
+        "DEFAULT_CHUNK_SIZE",
+        "DEFAULT_CHUNK_OVERLAP",
+        "MAX_FILE_SIZE_MB",
+        "WORKER_CONCURRENCY",
+        "PROJECT_NAME",
+    ):
+        assert numeric_field not in placeholders
+        assert numeric_field not in ev.env_var_names
+
