@@ -60,8 +60,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!auth) {
-      queueMicrotask(() => setLoading(false));
-      return;
+      const restoreSession = () => {
+        const owner = typeof window !== "undefined" ? localStorage.getItem("gitresolve_session_owner") : null;
+        const token = typeof window !== "undefined" ? (localStorage.getItem("gitresolve_access_token") || sessionStorage.getItem("gitresolve_access_token")) : null;
+        if (owner && token) {
+          setUser({
+            uid: owner,
+            email: `${owner}@gitresolve.dev`,
+            displayName: owner,
+            photoURL: null,
+            providerId: "password",
+          });
+        } else {
+          setUser(null);
+        }
+        setLoading(false);
+      };
+      restoreSession();
+      window.addEventListener("auth_change", restoreSession);
+      window.addEventListener("storage", restoreSession);
+      return () => {
+        window.removeEventListener("auth_change", restoreSession);
+        window.removeEventListener("storage", restoreSession);
+      };
     }
     return onIdTokenChanged(auth, (firebaseUser: User | null) => {
       const owner = localStorage.getItem("gitresolve_session_owner");

@@ -180,6 +180,22 @@ export default function NewRepairPage() {
 
         {/* Form Card */}
         <div className="new-repair-layout"><form onSubmit={handleSubmit} className="border border-neutral-200 dark:border-neutral-800 rounded-xl p-6 bg-white dark:bg-neutral-900 shadow-sm space-y-6">
+          {/* Zero-repository guidance */}
+          {!loadingRepos && repositories.length === 0 && (
+            <div className="p-3.5 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 text-xs flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-neutral-600 dark:text-neutral-400">
+                <Info className="w-4 h-4 shrink-0 text-neutral-500" />
+                <span>No repositories are currently accessible in your GitHub App installation.</span>
+              </div>
+              <Link
+                href="/repositories"
+                className="underline text-neutral-900 dark:text-neutral-100 font-medium shrink-0"
+              >
+                Manage repositories
+              </Link>
+            </div>
+          )}
+
           {/* Field 1: Repository Selector */}
           <RepositorySelector
             repositories={repositories}
