@@ -95,3 +95,11 @@ nextjs-portal { display: none !important; }
 .help-page dd{margin:8px 0 0}
 .help-page .legal-layout section a{color:var(--text);text-decoration:underline;text-underline-offset:4px;text-decoration-color:var(--stroke-hi)}
 @media(max-width:767px){.help-page .legal-layout nav{max-height:none;overflow:visible}}
+
+.github-auth-modal{min-height:min(620px,calc(100dvh - 48px))}
+.auth-setup-steps{list-style:none;margin:28px 0;padding:28px 0;border-block:1px solid var(--stroke);display:grid;gap:28px}
+.auth-setup-steps li{display:flex;align-items:flex-start;gap:20px}
+.auth-setup-steps li>span{width:40px;height:40px;flex-shrink:0;display:grid;place-items:center;border:1px solid var(--stroke-hi);background:var(--glass);font-size:13px;color:var(--text)}
+.auth-setup-steps h3{font-family:var(--font-geist-sans);font-size:18px;line-height:1.4;letter-spacing:-.02em;margin:0 0 8px;color:var(--text)}
+.auth-setup-steps p{font-size:14px;line-height:1.75;margin:0}
+.auth-setup-hint{padding:20px;background:var(--glass);border:1px solid var(--stroke);font-size:13px;line-height:1.8}

@@ -186,6 +186,12 @@ export async function listTasks(
   return request<TaskListResponse>(`/tasks?${params.toString()}`);
 }
 
+export async function deleteTaskHistory(): Promise<{deleted: number}> {
+  const result = await request<{deleted: number}>("/tasks/history", {method: "DELETE"});
+  apiQueryClient.clear();
+  return result;
+}
+
 export async function getTask(taskId: string): Promise<TaskResponse> {
   return request<TaskResponse>(`/tasks/${taskId}`);
 }

@@ -58,6 +58,14 @@ def list_tasks(
     return TaskListResponse(items=[TaskSummary.from_doc(r) for r in rows], next_cursor=next_cursor)
 
 
+@router.delete("/history", responses=ERRORS)
+def delete_history(
+    user_id: str = Depends(writer_user_id),
+    service: TaskService = Depends(get_task_service),
+) -> dict[str, int]:
+    return {"deleted": service.delete_history(user_id)}
+
+
 @router.get("/{task_id}", response_model=TaskResponse, responses=ERRORS)
 def get_task(
     task_id: str = TASK_ID,

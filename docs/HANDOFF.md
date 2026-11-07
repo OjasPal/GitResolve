@@ -1,31 +1,35 @@
 # Frontend UI fixes handoff
 
 ## Branch and working state
-- Branch is frontend/ui-fixes, based on 2094fe8.
-- Worktree is C:/Users/Ojas Pal/.codex/visualizations/2026/11/07/01a1b360-f75f-7a63-a2f8-c23fbe0eebe1/frontend-ui-fixes.
-- Antigravity continues in the original checkout on agent/workflow-optimization.
-- Changes remain uncommitted.
-- Removed duplicate inline legal navigation and Product/Safety/FAQ footer links.
-- Settings supports Firebase display-name edits with validation and immediate context updates.
-- Approval gates now have a plain Ask a question label and one question composer.
-- Help content was approved and implemented at /help using LegalPage's shared layout.
-- LegalPage accepts structured content and guide mode. Policy pages retain their existing draft notice and documentation link.
-- Help uses anchored numbered sections, ordered steps, navigation links and readable troubleshooting definitions.
-- Public footer order is Help, Privacy, Terms, Your data.
-- GitHub moved after FAQ in public desktop and mobile navigation.
+- Branch frontend/ui-fixes in isolated worktree C:/Users/Ojas Pal/.codex/visualizations/2026/11/07/01a1b360-f75f-7a63-a2f8-c23fbe0eebe1/frontend-ui-fixes.
+- Antigravity's original checkout remains on agent/workflow-optimization.
+- Approved frontend milestone saved as ab597e7.
+- Imported main commits 3cf9c2d and d4a8069 as f437830 and 3197d49.
+- Resolved shell/provider conflicts retaining Help/footer navigation and shared query client while integrating GitHub authorization guards.
+- Current popup/history modifications remain uncommitted.
+- Popup replaces duplicate permission lists with two setup steps in Geist Sans and setup Help link.
+- Popup retains substantial desktop height and adapts its minimum to short viewports.
+- Settings adds confirmed Delete history beside Sign out, with loading, success and retry feedback.
+- DELETE /api/v1/tasks/history uses authenticated/rate-limited user identity.
+- Finished tasks get transactional historyDeletedAt tombstones. Active and approval-gate tasks remain visible.
+- Deleted history is excluded from list/detail/events/artifact API reads. Stored quota/audit records follow existing retention.
+- Pagination scans past deleted rows. Repeated deletion is safe.
+- Prior Help, footer navigation, question-only chats and Firebase display-name edits remain included.
 
 ## Validation
-- Checks ran in network-disabled read-only node:22-alpine containers as user node.
-- Capabilities dropped, no-new-privileges, 768 MB RAM, 2 CPUs, 100 PID limit.
-- Source/config/dependencies mounted read-only with no credentials or Docker socket.
-- node node_modules/typescript/bin/tsc --noEmit --incremental false passed.
-- node node_modules/eslint/bin/eslint.js src/app/help/page.tsx src/components/LegalPage.tsx src/components/AppShell.tsx passed.
-- Prior settings/auth/chat targeted lint passed.
-- git diff --check passed.
-- No live model calls. No browser visual or authenticated Firebase checks performed.
+- All repository code executed only in hardened read-only network-disabled Docker containers.
+- No credentials or Docker socket mounted, capabilities dropped, no-new-privileges, nonroot user.
+- History tests use gitresolve-history-tests:local, derived from worker image with pytest installed separately.
+- python -m pytest backend/tests/unit/test_history_deletion.py -q -p no:cacheprovider -> 3 passed.
+- python -m pytest backend/tests/integration/test_api_security.py backend/tests/integration/test_task_lifecycle.py -q -p no:cacheprovider -> 38 passed.
+- node node_modules/typescript/bin/tsc --noEmit --incremental false -> passed.
+- node node_modules/eslint/bin/eslint.js src/app/settings/page.tsx src/components/GitHubAuthModal.tsx src/components/AppAccess.tsx src/components/AppShell.tsx src/components/Providers.tsx src/context/AuthContext.tsx src/lib/api.ts -> passed.
+- git diff --check -> passed.
+- No live model calls, browser visual verification or live Firestore test.
 
 ## Remaining work
-- Review /help in a running browser at desktop and mobile sizes.
-- Verify custom display-name persistence through GitHub reauthentication.
-- Coordinate integration with Antigravity before moving these changes to its checkout.
-- Original checkout contains the earlier untracked premium implementation guide.
+- Visually inspect popup and Settings in a running frontend from this worktree.
+- Check display-name persistence through GitHub reauthentication.
+- Deploy backend and frontend together for Delete history.
+- User approved exact earlier diff and import. Current changes require separate approval before committing.
+- Coordinate eventual integration with Antigravity.
