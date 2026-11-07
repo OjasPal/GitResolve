@@ -150,8 +150,32 @@ class Worker:
         except PullRequestError as exc:
             self._safely(lambda: self.service.fail(job.task_id, self.worker_id, exc.code, exc.message, job.phase))
         except Exception as exc:
+            from agent.router import AllProvidersFailedError, ProviderError
             from app.services.github import GitHubUnavailable
             from githubapp.client import GitHubClientError
+            if isinstance(exc, (ProviderError, AllProvidersFailedError)):
+                if getattr(exc, "reason", None) == "quality":
+                    self._safely(
+                        lambda: self.service.fail(
+                            job.task_id,
+                            self.worker_id,
+                            FailureCode.NO_FIX_FOUND,
+                            "The revised approach still could not be verified. Failure history is saved; refine the request before another run.",
+                            job.phase,
+                        )
+                    )
+                else:
+                    self._safely(
+                        lambda: self.service.fail(
+                            job.task_id,
+                            self.worker_id,
+                            FailureCode.LLM_UNAVAILABLE,
+                            "Investigation temporarily paused. Your progress is saved. Try again once the model service is available.",
+                            job.phase,
+                            outcome="infra_retry",
+                        )
+                    )
+                return
             if isinstance(exc, (GitHubUnavailable, GitHubClientError)):
                 code = getattr(exc, "code", str(exc))
                 failure = FailureCode(code) if code in {c.value for c in FailureCode} else FailureCode.GITHUB_ERROR

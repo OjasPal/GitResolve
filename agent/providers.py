@@ -338,6 +338,11 @@ class GoogleGenAIProvider(BaseProvider):
                 else default_timeout
             )
             effective_thinking = (thinking_level or self.settings.thinking_level or "LOW").upper()
+            sdk_thinking = (
+                "LOW"
+                if schema is not None and len(str(prompt)) > 12000
+                else effective_thinking
+            )
 
             config_kwargs: dict[str, Any] = {
                 "max_output_tokens": self.settings.max_output_tokens,
@@ -347,7 +352,7 @@ class GoogleGenAIProvider(BaseProvider):
                 ),
             }
             if model_id.startswith(("gemini-3", "gemini-4")):
-                config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=effective_thinking)
+                config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=sdk_thinking)
             if system_instruction:
                 config_kwargs["system_instruction"] = system_instruction
 

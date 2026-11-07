@@ -416,8 +416,8 @@ class ModelRouter:
                 if schema is not None and candidate.parsed is None:
                     try:
                         candidate.parsed = schema.model_validate_json(candidate.raw_text)
-                    except ValueError:
-                        return "The response did not satisfy the required structured output."
+                    except ValueError as exc:
+                        return f"The response did not satisfy the required structured output: {str(exc)[:300]}"
                 return quality_check(candidate) if quality_check else None
 
             reason = inadequate(result)

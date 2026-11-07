@@ -1087,3 +1087,94 @@ def test_al_eval_harness_with_provider_failure_injection_has_zero_unsafe_fast_ca
     assert metrics["full_runs"] == 2
     assert metrics["escalations"] == 1
     assert len(metrics["model_latencies_ms"][FALLBACK]) >= 2
+
+
+# --- 10. Context Recovery Provider Outage & Echoed needed_files Regression Tests ---
+
+
+def test_edit_proposal_with_echoed_needed_files_or_benign_blocked_reason_accepts_valid_patch() -> None:
+    import json
+
+    raw = json.dumps(
+        {
+            "explanation": "Add timeout=5 and RequestException guard in export_to_webhook.",
+            "tests": [
+                {
+                    "path": "tests/test_webhook.py",
+                    "content": "def test_webhook():\n    assert True\n",
+                }
+            ],
+            "edits": [
+                {
+                    "path": "src/exporters.py",
+                    "old_text": "requests.post(webhook_url, json=payload)",
+                    "new_text": "requests.post(webhook_url, json=payload, timeout=5)",
+                }
+            ],
+            "needed_files": ["server.ts", "src/App.tsx"],
+            "blocked_reason": "none",
+        }
+    )
+    prop = EditProposal.model_validate_json(raw)
+    assert len(prop.tests) == 1
+    assert len(prop.edits) == 1
+    assert prop.needed_files == []
+    assert prop.blocked_reason == ""
+
+
+def test_patch_context_recovery_provider_outage_returns_infra_retry_never_uncaught_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AGENT_ENGINE", "graph")
+    monkeypatch.setenv("ADAPTIVE_LANES", "on")
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    (src_dir / "exporters.py").write_text(
+        "import requests\n\ndef export_to_webhook(url: str, payload: dict) -> dict:\n"
+        "    return requests.post(url, json=payload).json()\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "server.ts").write_text(
+        "export async function dispatchWebhook() { return { status: 'error' }; }\n",
+        encoding="utf-8",
+    )
+
+    call_idx = [0]
+
+    class RecoveryOutageRouter:
+        def route_normal(self, prompt: str, **kwargs: Any) -> Any:
+            call_idx[0] += 1
+            if call_idx[0] == 1:
+                return SimpleNamespace(
+                    result=SimpleNamespace(
+                        parsed=EditProposal(
+                            explanation="Need to inspect server.ts before patching exporters.py",
+                            needed_files=["server.ts"],
+                        ),
+                        raw_text="",
+                    ),
+                    selected_provider="google",
+                    selected_model=PRIMARY,
+                    usage=create_usage_record("google", PRIMARY, 100, 20),
+                )
+            raise AllProvidersFailedError("Reasoning specialist could not complete; recovery required.", [])
+
+    ctx = Phase3Context(tmp_path, [_exec_result(0, "4 passed")])
+    task = SimpleNamespace(
+        base_sha=BASE_SHA,
+        task_id="tsk_recovery_outage",
+        limits=LIMITS,
+        attempts_used=0,
+        issue={
+            "title": "Webhook Exporter Unhandled Request Error / Timeout",
+            "body": "requests.post() in src/exporters.py has no timeout argument and no try/except RequestException block.",
+        },
+        plan={"targetFiles": ["src/exporters.py"]},
+    )
+
+    outcome = run_repair(task, ctx, RecoveryOutageRouter())
+    assert outcome.outcome == "infra_retry"
+    assert outcome.failure_code == FailureCode.LLM_UNAVAILABLE
+    assert "Reference:" not in (outcome.failure_message or "")
+    assert ctx.attempt_count == 0
+

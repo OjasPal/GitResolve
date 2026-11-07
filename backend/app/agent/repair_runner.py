@@ -48,11 +48,20 @@ class EditProposal(BaseModel):
 
     @model_validator(mode="after")
     def actionable_or_blocked(self):
+        if self.blocked_reason and self.blocked_reason.strip().lower() in {
+            "none", "n/a", "null", "false", "no", "not blocked", "0", ""
+        }:
+            self.blocked_reason = ""
+        if self.tests and self.edits:
+            self.needed_files = []
+            self.blocked_reason = ""
+            return self
         if self.blocked_reason or self.needed_files:
-            if self.tests or self.edits: raise ValueError("A blocked response cannot contain a patch.")
-        elif not self.tests or not self.edits:
-            raise ValueError("An actionable repair requires tests and implementation edits.")
-        return self
+            if self.tests or self.edits:
+                self.tests = []
+                self.edits = []
+            return self
+        raise ValueError("An actionable repair requires tests and implementation edits.")
 
 
 class FastEditProposal(BaseModel):
@@ -160,34 +169,71 @@ _CONTEXT_STOPWORDS = frozenset({
 
 def _referenced_files(texts: list[str], originals: dict[str, str]) -> list[str]:
     joined = "\n".join(t for t in texts if t).replace("\\", "/")
+    joined_lower = joined.lower()
     tokens = {
         tok for tok in re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", joined)
         if tok.lower() not in _CONTEXT_STOPWORDS
     }
-    matched: list[str] = []
+    primary: list[str] = []
+    secondary: list[str] = []
     for name in sorted(originals):
         base = PurePosixPath(name).name
         text = originals[name]
-        if name in joined or (len(base) > 3 and base in joined):
-            matched.append(name)
+        if (
+            name in joined
+            or name.lower() in joined_lower
+            or (len(base) > 3 and (base in joined or base.lower() in joined_lower))
+        ):
+            primary.append(name)
             continue
-        if any(re.search(rf"\b(?:def|class)\s+{re.escape(tok)}\b", text) for tok in tokens):
-            matched.append(name)
-    return matched
+        if (name.startswith("tests/") or base.startswith("test_")) and (
+            "tests/" in joined_lower or "test_" in joined_lower
+        ):
+            primary.append(name)
+            continue
+        if any(re.search(rf"\b(?:def|class|function|const)\s+{re.escape(tok)}\b", text) for tok in tokens):
+            secondary.append(name)
+    return primary + [n for n in secondary if n not in primary]
 
 
 def _expand_context_for_files(base_context: str, originals: dict[str, str], files: list[str], max_extra_chars: int = 24000) -> str:
     if not files:
         return base_context
+    # Prioritize files that were not already included in full in base_context
+    prioritized: list[str] = []
+    already_full: list[str] = []
+    for name in files:
+        if name not in originals:
+            continue
+        line_count = len(originals[name].splitlines())
+        header_present = f"--- {name} (" in base_context
+        last_line_present = line_count > 0 and f"\n{line_count:4}: " in base_context
+        if header_present and last_line_present:
+            already_full.append(name)
+        else:
+            prioritized.append(name)
+    ordered_files = prioritized + already_full
+
     extra_chunks: list[str] = []
     remaining = max_extra_chars
-    for name in files:
+    for name in ordered_files:
         if name not in originals or remaining < 100:
             continue
         lines = originals[name].splitlines()
         numbered = "\n".join(f"{i+1:4}: {line}" for i, line in enumerate(lines))
-        block = f"\n--- {name} (requested full source; line numbered) ---\n" + redact(numbered)
-        block = block[:min(12000, remaining)]
+        cap = min(14000, remaining)
+        if len(numbered) + 80 <= cap:
+            block = f"\n--- {name} (requested full source; line numbered) ---\n" + redact(numbered)
+        else:
+            # Large file: include top lines plus sections matching issue/context keywords
+            selected = set(range(min(60, len(lines))))
+            for idx, line in enumerate(lines):
+                low = line.lower()
+                if any(k in low for k in ("webhook", "export", "dispatch", "error", "timeout", "exception", "fetch(")):
+                    selected.update(range(max(0, idx - 6), min(len(lines), idx + 18)))
+            excerpt = "\n".join(f"{i+1:4}: {lines[i]}" for i in sorted(selected))
+            block = f"\n--- {name} (requested full source; line numbered) ---\n" + redact(excerpt)
+        block = block[:cap]
         extra_chunks.append(block)
         remaining -= len(block)
     if not extra_chunks:
@@ -235,7 +281,7 @@ def repository_context(root: Path, max_chars: int = 60000, issue: str = "", focu
         name = path.relative_to(root).as_posix()
         if any(part.startswith(".") for part in Path(name).parts):
             continue
-        if path.suffix not in {".py", ".toml", ".txt", ".md", ".html", ".css", ".json"}:
+        if path.suffix not in {".py", ".toml", ".txt", ".md", ".html", ".css", ".json", ".ts", ".tsx", ".js", ".jsx"}:
             continue
         if any(word in path.name.lower() for word in ("secret", "credential", "private", "token", "service-account", "service_account")):
             continue
@@ -252,12 +298,14 @@ def repository_context(root: Path, max_chars: int = 60000, issue: str = "", focu
         lines = text.splitlines()
         def_hits = [
             i for i, line in enumerate(lines)
-            if any(re.search(rf"\b(?:def|class)\s+{re.escape(tok)}\b", line) for tok in tokens)
+            if any(re.search(rf"\b(?:def|class|function|const)\s+{re.escape(tok)}\b", line) for tok in tokens)
         ]
         score = (
             500 * (name in focus_set or base in focus_set)
             + 200 * is_named
             + 150 * bool(def_hits)
+            + 80 * (path.suffix == ".py")
+            + 60 * base.startswith("test_")
             + 30 * (name in profile.entrypoints)
             + 20 * (name in profile.dependency_files)
         )
@@ -273,7 +321,8 @@ def repository_context(root: Path, max_chars: int = 60000, issue: str = "", focu
         if remaining < 100:
             break
         lines = text.splitlines()
-        if (is_named or def_hits) and len(lines) <= 220:
+        is_test_file = PurePosixPath(name).name.startswith("test_")
+        if len(lines) <= 100 or ((is_named or def_hits or is_test_file) and len(lines) <= 220):
             selected = set(range(len(lines)))
         else:
             selected = set(range(min(45 if is_named else 35, len(lines))))
