@@ -5,6 +5,7 @@ import { RepositoryView } from "@/types";
 import {
   Check,
   ChevronDown,
+  ExternalLink,
   FolderGit2,
   Globe,
   Lock,
@@ -147,10 +148,23 @@ export function RepositorySelector({
           {/* List items */}
           <div className="max-h-60 overflow-y-auto py-1 divide-y divide-neutral-100 dark:divide-neutral-800/50">
             {filtered.length === 0 ? (
-              <div className="p-4 text-center text-xs text-neutral-500">
-                {repositories.length === 0
-                  ? "No repositories found for this GitHub App installation."
-                  : "No repositories match your search."}
+              <div className="p-4 text-center text-xs text-neutral-500 space-y-2">
+                <p>
+                  {repositories.length === 0
+                    ? "No repositories found for this GitHub App installation."
+                    : "No repositories match your search."}
+                </p>
+                {repositories.length === 0 && (
+                  <a
+                    href={process.env.NEXT_PUBLIC_GITHUB_APP_URL || "/repositories"}
+                    target={process.env.NEXT_PUBLIC_GITHUB_APP_URL ? "_blank" : undefined}
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 text-[11px] text-blue-600 dark:text-blue-400 hover:underline"
+                  >
+                    <span>Configure accessible repositories</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                )}
               </div>
             ) : (
               filtered.map((repo) => {

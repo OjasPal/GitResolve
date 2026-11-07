@@ -111,8 +111,9 @@ export function GitHubAuthProvider({ children }: { children: React.ReactNode }) 
           const reposRes = await listRepositories();
           const items = reposRes.items || [];
           setRepositories(items);
-          // Set to true if repositories are accessible; if zero, user is still authorized
-          setHasInstalledApp(items.length > 0);
+          // When listRepositories returns successfully (even with 0 items), the GitHub App is connected.
+          // An empty list means 0 repositories are selected, NOT that the app is uninstalled.
+          setHasInstalledApp(true);
         } catch {
           setRepositories([]);
         }

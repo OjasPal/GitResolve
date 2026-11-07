@@ -149,14 +149,20 @@ export default function RepositoriesPage() {
               </div>
             ) : filteredRepos.length === 0 ? (
               <div className="p-6 text-center text-xs text-neutral-500 space-y-2">
-                <p>No repositories match.</p>
+                <p>
+                  {repositories.length === 0
+                    ? "No repositories are currently accessible."
+                    : "No repositories match your search."}
+                </p>
                 <a
                   href={githubAppUrl}
                   target="_blank"
                   rel="noreferrer"
                   className="inline-block text-neutral-900 dark:text-neutral-100 underline text-xs"
                 >
-                  Install GitHub App on an account
+                  {repositories.length === 0
+                    ? "Configure repositories in GitHub App"
+                    : "Install GitHub App on an account"}
                 </a>
               </div>
             ) : (
@@ -278,7 +284,9 @@ export default function RepositoriesPage() {
               </>
             ) : (
               <div className="p-12 text-center text-xs text-neutral-500">
-                Select a repository to view details and open issues.
+                {repositories.length === 0
+                  ? "No repositories are currently accessible. Configure your repository selection in GitHub App settings."
+                  : "Select a repository to view details and open issues."}
               </div>
             )}
           </div>

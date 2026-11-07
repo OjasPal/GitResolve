@@ -27,12 +27,20 @@ export function AppAccess({ children }: { children: React.ReactNode }) {
     }
     setChecking(true);
     try {
+      // 1. Verify GitHub authorization status independently of repository count
       await getMe();
-      const repos = await listRepositories();
-      if (!repos.items.length) {
-        setError("No authorized repositories found. Install the GitHub App on at least one repository, then authorize GitHub again to refresh access.");
-      } else setReady(true);
+      // Authorized successfully: allow user to enter the workspace
+      setReady(true);
+
+      // 2. Fetch accessible repositories without blocking workspace access if 0 are selected
+      try {
+        await listRepositories();
+      } catch {
+        // Repository fetch failure does not revoke valid GitHub authorization;
+        // individual workspace pages will handle retryable repository loading.
+      }
     } catch (err) {
+      setReady(false);
       setError(err instanceof ApiError && err.status === 401
         ? "Your GitHub session expired. Authorize GitHub again to continue."
         : err instanceof Error ? err.message : "Unable to check GitHub access.");
