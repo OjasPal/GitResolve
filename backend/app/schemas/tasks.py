@@ -92,6 +92,13 @@ class PlanData(PublicTaskModel):
     steps: list[str] = Field(min_length=1, max_length=10)
     likely_files: list[str] = Field(default_factory=list, max_length=20)
     questions: list[str] = Field(default_factory=list, max_length=10)
+    task_type: Literal["bug", "feature", "refactor", "config", "unclear"] = "bug"
+    spec: str = Field(default="", max_length=2000)
+    acceptance_criteria: list[str] = Field(default_factory=list, max_length=10)
+    expected_files: list[str] = Field(default_factory=list, max_length=20)
+    line_budget: int = Field(default=120, ge=1, le=1000)
+    dependency_changes: list[dict[str, Any]] = Field(default_factory=list, max_length=10)
+    plan_hash: str = Field(default="", max_length=128)
 
 
 class Attempts(PublicTaskModel):

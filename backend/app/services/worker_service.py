@@ -396,7 +396,7 @@ class WorkerService:
                     "finalDiffHash": sha256_hash(diff_doc["content"]),
                     "finalDiffSummary": summary,
                     "verification": {key: (verification or {}).get(key) for key in
-                                     ("reproduced", "regressionPassed", "testsRun", "newFailures", *tuple(k for k in ("lane", "verificationLevel", "oracle", "timing", "escalations") if k in (verification or {})))},
+                                     ("reproduced", "regressionPassed", "testsRun", "newFailures", *tuple(k for k in ("lane", "verificationLevel", "oracle", "timing", "escalations", "taskType", "approvedDependencyChanges", "touchedSymbolsCovered", "configProfileValidated", "v2Selection") if k in (verification or {})))},
                     "approval": {"state": ApprovalState.PENDING.value, "by": None, "at": None, "diffHash": None},
                     "dispatchPhase": None,
                     **release_lease(),

@@ -354,6 +354,13 @@ class TaskService:
                 except ValueError:
                     raise invalid_state("The cleanup scope changed. Investigate the request again before approving.") from None
                 cleanup_updates={"cleanupScope":{**scope,"approved":True},"limits":{**ctx.task["limits"],"maxDiffLines":scope["maxDiffLines"]}}
+            elif isinstance(ctx.task.get("plan"), dict):
+                from app.services.policy import derive_limits, validate_plan_scope
+                try:
+                    validate_plan_scope(ctx.task["plan"], ctx.task["limits"])
+                except ValueError as exc:
+                    raise invalid_state(str(exc)) from None
+                cleanup_updates = {"limits": derive_limits(ctx.task["plan"], ctx.task["limits"])}
             return apply_change(
                 txn, ctx, self.settings, now,
                 to_status=TaskStatus.RUNNING,

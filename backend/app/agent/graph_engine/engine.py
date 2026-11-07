@@ -51,7 +51,10 @@ from app.agent.lanes import (
     LaneRuntimeState,
     OracleEvidence,
     RiskFloor,
+    TaskType,
     VerificationPlan,
+    analyze_python_source,
+    apply_unified_diff,
     check_fast_budget,
     escalate,
     is_oracle_evidence_valid,
@@ -82,7 +85,17 @@ from app.agent.repair_runner import (
 from app.core.redaction import redact
 from app.schemas.enums import ArtifactType, EventLevel, EventType, FailureCode, TaskStage
 from app.services.ids import sha256_hash
-from app.services.policy import validate_fix
+from app.services.policy import (
+    ALLOWED_CONFIG_PROFILES,
+    HARD_CAPS,
+    derive_limits,
+    extract_allowed_dependency_changes,
+    is_allowed_config_profile,
+    is_allowed_requirements_file,
+    validate_config_profile_diff_section,
+    validate_fix,
+    validate_plan_scope,
+)
 from app.services.publication_patch import publication_patch
 from sandbox.classification import INFRA_CATEGORIES, classify
 
@@ -202,10 +215,12 @@ def _deserialize_execute_result(data: dict[str, Any]) -> ExecuteResult:
     )
 
 
-def _ensure_regression_test_in_overlay(overlay: WorkspaceOverlay) -> None:
+def _ensure_regression_test_in_overlay(overlay: WorkspaceOverlay, *, task_type: str = "bug") -> None:
     """When a tool-loop repair edits source files for a repo whose existing tests already reproduce the bug,
     mirror an existing test file into a sandbox-only new test file if no new test was explicitly created.
     """
+    if task_type in {"config", "refactor"}:
+        return
     if overlay.serialize_tests():
         return
     if not overlay.implementation_diff():
@@ -227,6 +242,97 @@ def _ensure_regression_test_in_overlay(overlay: WorkspaceOverlay) -> None:
     if synth_name in overlay.originals:
         synth_name = "test_gitresolve_verify_regression.py"
     overlay.create_file(synth_name, chosen_content, is_test=True)
+
+
+def _check_refactor_symbol_coverage_and_exports(
+    originals: dict[str, str],
+    impl_diff: str,
+    repro_diff: str,
+    approved_plan: dict[str, Any] | None = None,
+) -> tuple[bool, list[str], list[str]]:
+    """Inspect a refactor diff for:
+    1. Touched pre-existing functions/classes and whether test files reference/cover them.
+    2. Unapproved public export (`__all__` / non-underscore top-level symbol) changes.
+    Returns `(all_touched_covered, uncovered_symbols, unapproved_export_changes)`.
+    """
+    import ast as _ast
+
+    patched_impl = apply_unified_diff(originals, impl_diff)
+    patched_tests = apply_unified_diff(originals, repro_diff) if repro_diff else dict(originals)
+
+    allowed_exports: set[str] = set()
+    if isinstance(approved_plan, dict):
+        raw_exp = approved_plan.get("allowed_export_changes") or approved_plan.get("allowedExportChanges") or []
+        if isinstance(raw_exp, list):
+            allowed_exports.update(str(x) for x in raw_exp if x)
+
+    all_test_sources: list[str] = [
+        content
+        for path, content in sorted(patched_tests.items())
+        if (PurePosixPath(path).name.startswith("test_") or path.endswith("_test.py")) and path.endswith(".py")
+    ]
+
+    touched_symbols: list[tuple[str, str]] = []
+    unapproved_exports: list[str] = []
+
+    for path in sorted(set(originals) | set(patched_impl)):
+        before = originals.get(path, "")
+        after = patched_impl.get(path, "")
+        if before == after or not path.endswith(".py"):
+            continue
+        p_name = PurePosixPath(path).name.casefold()
+        if p_name.startswith("test_") or p_name.endswith("_test.py"):
+            continue
+        orig_analysis = analyze_python_source(before, path)
+        patch_analysis = analyze_python_source(after, path)
+        if orig_analysis.exported_names != patch_analysis.exported_names:
+            diff_exp = sorted(set(orig_analysis.exported_names) ^ set(patch_analysis.exported_names))
+            for sym in diff_exp:
+                if sym not in allowed_exports:
+                    unapproved_exports.append(f"{path}:{sym}")
+
+        try:
+            orig_tree = _ast.parse(before, filename=path)
+            patch_tree = _ast.parse(after, filename=path)
+        except SyntaxError:
+            continue
+
+        orig_defs: dict[str, str] = {}
+        for node in orig_tree.body:
+            if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef)):
+                orig_defs[node.name] = _ast.dump(node, include_attributes=False)
+        patch_defs: dict[str, str] = {}
+        for node in patch_tree.body:
+            if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef)):
+                patch_defs[node.name] = _ast.dump(node, include_attributes=False)
+
+        file_touched_syms: list[str] = []
+        for sym_name, orig_dump in orig_defs.items():
+            if sym_name not in patch_defs or patch_defs[sym_name] != orig_dump:
+                file_touched_syms.append(sym_name)
+        if not file_touched_syms and orig_defs:
+            file_touched_syms.extend(sorted(orig_defs.keys())[:2])
+        for s in file_touched_syms:
+            touched_symbols.append((path, s))
+
+    uncovered: list[str] = []
+    for path, sym in touched_symbols:
+        mod_stem = PurePosixPath(path).stem
+        is_cov = False
+        for t_src in all_test_sources:
+            if re.search(rf"\b{re.escape(sym)}\b", t_src):
+                is_cov = True
+                break
+            if sym.startswith("_") and re.search(rf"\b{re.escape(mod_stem)}\b", t_src):
+                is_cov = True
+                break
+        if not is_cov:
+            uncovered.append(f"{path}:{sym}")
+
+    if not all_test_sources and touched_symbols:
+        uncovered = [f"{p}:{s}" for p, s in touched_symbols]
+
+    return len(uncovered) == 0, uncovered, unapproved_exports
 
 
 def run_repair_graph(
@@ -253,6 +359,40 @@ def run_repair_graph(
     if getattr(task, "cleanup_scope", None):
         from app.agent.cleanup_runner import run_cleanup
         return run_cleanup(task, ctx)
+
+    approved_plan: dict[str, Any] | None = (
+        dict(task.plan) if isinstance(getattr(task, "plan", None), dict) else None
+    )
+    try:
+        validate_plan_scope(approved_plan, getattr(task, "limits", None))
+    except ValueError as exc:
+        _safe_event(
+            ctx,
+            EventType.POLICY_CHECK,
+            f"Approved plan rejected by deterministic scope policy: {redact(str(exc), 240)}",
+            level=EventLevel.WARN,
+        )
+        return ExecuteResult(
+            "out_of_scope",
+            failure_code=FailureCode.POLICY_VIOLATION,
+            failure_message=str(exc)[:400],
+            next_step="Revise the plan to stay within hard caps and editable paths.",
+        )
+
+    from agent.graph import compute_plan_hash
+
+    pinned_plan_hash = ""
+    if isinstance(approved_plan, dict):
+        if approved_plan.get("plan_hash"):
+            pinned_plan_hash = str(approved_plan["plan_hash"])
+        elif any(
+            k in approved_plan
+            for k in ("spec", "acceptance_criteria", "expected_files", "dependency_changes", "task_type")
+        ):
+            pinned_plan_hash = compute_plan_hash(approved_plan)
+
+    effective_limits = derive_limits(approved_plan, getattr(task, "limits", None))
+    allowed_dep_changes = extract_allowed_dependency_changes(approved_plan)
 
     run_started = time.perf_counter()
     engine_mode = get_engine_mode()
@@ -301,6 +441,7 @@ def run_repair_graph(
             schema_version=CHECKPOINT_SCHEMA_VERSION,
             lanes_policy_version=lanes_policy_version,
             adaptive_lanes_mode=al_mode_str,
+            pinned_plan_hash=pinned_plan_hash,
         )
     except (CheckpointCompatibilityError, ValueError) as exc:
         _safe_event(
@@ -394,6 +535,7 @@ def run_repair_graph(
             schema_version=CHECKPOINT_SCHEMA_VERSION,
             lanes_policy_version=lanes_policy_version,
             adaptive_lanes_mode=al_mode_str,
+            pinned_plan_hash=pinned_plan_hash,
         )
         existing_tuple = None
     is_resuming = existing_tuple is not None and bool(existing_tuple.checkpoint.get("channel_values"))
@@ -477,7 +619,7 @@ def run_repair_graph(
                 profile,
                 originals,
                 issue_query,
-                task.plan if isinstance(task.plan, dict) else None,
+                approved_plan,
                 set(declared_deps),
             )
             initial_lane_state = LaneRuntimeState(
@@ -485,6 +627,28 @@ def run_repair_graph(
                 risk_floor=triage.risk_floor,
                 triage=triage,
                 fast_started_at=_now_wall_ts(),
+            )
+        effective_task_type = triage.task_type_floor.value
+        plan_ref: dict[str, Any] = {
+            "planHash": pinned_plan_hash,
+            "taskType": effective_task_type,
+            "expectedFilesCount": len(approved_plan.get("expected_files") or []) if isinstance(approved_plan, dict) else 0,
+            "lineBudget": int(approved_plan.get("line_budget") or 0) if isinstance(approved_plan, dict) else 0,
+            "allowedDependencyChanges": list(allowed_dep_changes),
+        }
+        if effective_task_type == TaskType.UNCLEAR.value:
+            return ExecuteResult(
+                "needs_clarification",
+                failure_code=FailureCode.ISSUE_AMBIGUOUS,
+                failure_message="The issue description is ambiguous or lacks concrete requirements/reproduction details.",
+                next_step="Clarify the target module, expected behavior, and concrete reproduction or acceptance steps.",
+            )
+        if allowed_dep_changes and not any(is_allowed_requirements_file(f) for f in originals):
+            return ExecuteResult(
+                "out_of_scope",
+                failure_code=FailureCode.POLICY_VIOLATION,
+                failure_message="Dependency changes are only supported via requirements*.txt with binary wheels; this repository uses an unsupported dependency/build manifest.",
+                next_step="Update dependencies manually in pyproject.toml/setup.py and re-run.",
             )
         base_context = repository_context(root_path, 40000, issue_query, focus_files=triage.localized_files)
         fast_context = (
@@ -557,7 +721,52 @@ def run_repair_graph(
             overlay_edits=raw_edits,
             overlay_tests=state.get("overlay_tests", []),
             expected_diff_hash=expected_hash,
+            allow_requirements=bool(allowed_dep_changes),
         )
+
+    def _proposal_limits_for(proposal: RepairProposal) -> dict[str, int]:
+        repro_files = diff_sections(proposal.reproduction_diff)
+        return {
+            **effective_limits,
+            "maxDiffFiles": min(
+                HARD_CAPS["maxDiffFiles"],
+                int(effective_limits["maxDiffFiles"]) + max(1, len(repro_files)),
+            ),
+            "maxDiffLines": min(
+                HARD_CAPS["maxDiffLines"],
+                int(effective_limits["maxDiffLines"]) + 120,
+            ),
+        }
+
+    def _validate_candidate_proposal(proposal: RepairProposal) -> None:
+        validate_proposal(
+            proposal,
+            _proposal_limits_for(proposal),
+            task.base_sha,
+            task_type=effective_task_type,
+            allowed_dependency_changes=allowed_dep_changes,
+        )
+        pub_diff = publication_patch(proposal.final_diff)
+        if pub_diff.strip():
+            validate_fix(
+                pub_diff,
+                effective_limits,
+                {
+                    "reproduced": True,
+                    "regressionPassed": True,
+                    "testsRun": 1,
+                    "newFailures": [],
+                    "taskType": effective_task_type,
+                    "baselinePassed": True,
+                    "touchedSymbolsCovered": True,
+                    "configProfileValidated": True,
+                },
+                task.base_sha,
+                require_regression=False,
+                allow_static_oracle=False,
+                task_type=effective_task_type,
+                allowed_dependency_changes=allowed_dep_changes,
+            )
 
     def _reserve_supplied_router_call(budgets: dict[str, int]) -> None:
         if supplied_router:
@@ -1520,7 +1729,7 @@ Return QualityReview."""
         if memory.persistent():
             try:
                 cand_prop = parsed_obj if isinstance(parsed_obj, RepairProposal) else compile_edits(parsed_obj, originals)
-                validate_proposal(cand_prop, task.limits, task.base_sha)
+                _validate_candidate_proposal(cand_prop)
             except ValueError as exc:
                 return "The same deterministic validation barrier persists after two attempts: " + str(exc)[:700] + ". Choose a materially different valid approach or return blocked_reason."
         return None
@@ -1554,7 +1763,7 @@ Escape every user/model-generated value inserted into HTML, including questions,
 For new pure helpers in modules with unavailable dependencies, tests can AST-load just those functions INSIDE the test,
 assert their existence first, and supply required standard-library modules. Do not import the full dependency-heavy module.
 Test meaningful behavior (parsing, escaped HTML, answers hidden/revealed), not just whether source contains a phrase.
-Scope: at most {task.limits['maxDiffFiles']} files and {task.limits['maxDiffLines']} added/deleted lines.
+Task mode: {effective_task_type}. Scope: at most {effective_limits['maxDiffFiles']} files and {effective_limits['maxDiffLines']} added/deleted lines.
 User request: {task.issue.get('body') or task.issue.get('title')}
 Approved plan: {task.plan}
 Previous attempt feedback: {current_feedback[-8000:]}
@@ -1710,7 +1919,11 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
                 "path": ref_targets[0] if ref_targets else "",
             })
         elif strategy_act == "inspect_callers":
-            overlay_probe = WorkspaceOverlay(base_sha=task.base_sha, originals=originals)
+            overlay_probe = WorkspaceOverlay(
+                base_sha=task.base_sha,
+                originals=originals,
+                allow_requirements=bool(allowed_dep_changes),
+            )
             changed_syms: list[str] = []
             for sym_m in re.finditer(r"\bdef\s+([A-Za-z_][A-Za-z0-9_]*)\b", rt.get("previous_proposal", "") + "\n" + feedback):
                 s_name = sym_m.group(1)
@@ -1774,7 +1987,7 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
         rt["last_specialist_attempt"] = attempt
         ceilings_map = state.get("budget_ceilings") or ceilings
         remaining_budget = {
-            "remainingAttempts": max(0, int(task.limits.get("maxRepairAttempts", 3)) - attempt + 1),
+            "remainingAttempts": max(0, int(effective_limits.get("maxRepairAttempts", 3)) - attempt + 1),
             "remainingModelCalls": max(0, int(ceilings_map.get("maxProviderCalls", 100)) - int(budgets.get("modelCalls", 0))),
             "remainingToolCalls": max(0, int(ceilings_map.get("maxToolCalls", 120)) - int(budgets.get("toolCalls", 0))),
             "remainingSpecialistCalls": max(0, max_spec - spec_used - 1),
@@ -1785,6 +1998,7 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
         vplan_hash = sha256_hash(json.dumps(vplan_rep, sort_keys=True))[:16] if vplan_rep else "none"
         oracle_ev = state.get("oracle_evidence") or {}
         oracle_ref = str(oracle_ev.get("diffHash") or "none")[:16]
+        plan_hash_ref = pinned_plan_hash[:16] if pinned_plan_hash else vplan_hash
         escalation_refs = [
             {
                 "reason": e.get("reason"),
@@ -1798,10 +2012,11 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
             "You are GitResolve's specialist reflect-and-replan architect (gemini-4-argon).\n"
             "Analyze the failed repair trajectory and produce a concise root-cause diagnosis and alternative repair strategy.\n"
             f"Trigger reason: {trigger_reason}\n"
+            f"Task type: {effective_task_type}\n"
             f"Issue summary: {redact(issue_query, 600)}\n"
             f"Localized files: {state.get('localized_files', [])}\n"
             f"Lane/Escalation evidence refs (by hash/ref, never duplicated): "
-            f"triageRef=sha256:{triage_hash}, planRef=sha256:{vplan_hash}, oracleDiffRef={oracle_ref}, "
+            f"taskType={effective_task_type}, triageRef=sha256:{triage_hash}, planRef=sha256:{plan_hash_ref}, oracleDiffRef={oracle_ref}, "
             f"escalations={json.dumps(escalation_refs, sort_keys=True)}\n"
             f"Compact attempt trajectory: {json.dumps(compact_traj, sort_keys=True)}\n"
             f"Remaining task budgets: {json.dumps(remaining_budget, sort_keys=True)}\n"
@@ -1811,7 +2026,7 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
             ctx,
             EventType.LLM_CALL,
             f"Escalating to specialist gemini-4-argon for reflect-and-replan ({trigger_reason}).",
-            data={"trigger": trigger_reason, "specialistCallIndex": spec_used + 1},
+            data={"trigger": trigger_reason, "specialistCallIndex": spec_used + 1, "taskType": effective_task_type},
         )
         try:
             _reserve_supplied_router_call(budgets)
@@ -1829,16 +2044,16 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
             parsed_adv = getattr(spec_resp.result, "parsed", None)
             if isinstance(parsed_adv, SpecialistAdvice):
                 advice_str = (
-                    f"[{trigger_reason} | triageRef=sha256:{triage_hash}] "
+                    f"[{trigger_reason} | taskType={effective_task_type} | triageRef=sha256:{triage_hash}] "
                     f"Diagnosis: {parsed_adv.root_cause_diagnosis} | "
                     f"Strategy: {parsed_adv.recommended_strategy} | "
                     f"Targets: {', '.join(parsed_adv.target_files)}"
                 )
             elif hasattr(parsed_adv, "explanation"):
-                advice_str = f"[{trigger_reason} | triageRef=sha256:{triage_hash}] {getattr(parsed_adv, 'explanation', '')}"
+                advice_str = f"[{trigger_reason} | taskType={effective_task_type} | triageRef=sha256:{triage_hash}] {getattr(parsed_adv, 'explanation', '')}"
             else:
                 raw_adv = str(getattr(spec_resp.result, "raw_text", "") or "")
-                advice_str = f"[{trigger_reason} | triageRef=sha256:{triage_hash}] {raw_adv[:800]}"
+                advice_str = f"[{trigger_reason} | taskType={effective_task_type} | triageRef=sha256:{triage_hash}] {raw_adv[:800]}"
             advice_str = redact(advice_str, 1100)
             return {
                 "specialist_calls_used": new_spec_used,
@@ -1906,6 +2121,7 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
         feedback = state.get("last_failure_summary", "")
         spec_advice = str(state.get("specialist_advice") or "")
         last_tel: dict[str, Any] = dict(state.get("provider_metadata") or {})
+        v2_stats: dict[str, Any] = dict(state.get("v2_selection_stats") or {})
 
         for _turn in range(turns_so_far, MAX_TOOLS_PER_NODE_TURN):
             ctx.checkpoint()
@@ -2015,6 +2231,8 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
                     evidence_refs.append(tool_res.evidence_id)
                 if tool_res.path and tool_res.path in originals and tool_res.path not in explored_files:
                     explored_files.append(tool_res.path)
+                if isinstance(tool_res.extra.get("v2Selection"), dict):
+                    v2_stats = dict(tool_res.extra["v2Selection"])
 
                 if action_hashes and action_hashes[-1] == tool_res.action_hash:
                     repeated_count += 1
@@ -2118,6 +2336,7 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
                         "recovery_read_triggered": blocked_recovered,
                         "specialist_calls_used": spec_used,
                         "provider_metadata": last_tel,
+                        "v2_selection_stats": v2_stats,
                         "patch_loop_done": False,
                         "patch_turns_in_attempt": _turn + 1,
                     }
@@ -2236,10 +2455,46 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
                     EventType.LLM_CALL,
                     f"Model returned a repair proposal ({getattr(response, 'selected_provider', 'google')}/{getattr(response, 'selected_model', 'gemini')}).",
                 )
-                validate_proposal(proposal, task.limits, task.base_sha)
+                vplan = plan_verification(
+                    originals,
+                    proposal.final_diff,
+                    rt["lane_state"].triage,
+                    set(declared_deps),
+                    approved_plan=approved_plan,
+                )
+                rt["lane_state"] = dc_replace(rt["lane_state"], plan=vplan)
+                if (
+                    effective_task_type == TaskType.BUG.value
+                    and "feature_sized_diff_in_bug_mode" in vplan.patch_facts.override_reasons
+                    and isinstance(approved_plan, dict)
+                    and str(approved_plan.get("task_type") or "").strip().lower() == "bug"
+                ):
+                    lane_state, _ = escalate(
+                        rt["lane_state"],
+                        EscalationReason.SCOPE_GROWTH,
+                        "Implementation diff is feature-sized, contradicting the approved bug-fix plan.",
+                        now_wall_ts=_now_wall_ts(),
+                    )
+                    return {
+                        **_sync_lane_state(lane_state),
+                        "budgets": budgets,
+                        "messages": messages_out,
+                        "specialist_calls_used": spec_used,
+                        "last_failure_category": FailureCategory.POLICY_BLOCK.value,
+                        "terminal_outcome": _serialize_execute_result(
+                            ExecuteResult(
+                                "out_of_scope",
+                                failure_code=FailureCode.POLICY_VIOLATION,
+                                failure_message="Implementation diff is feature-sized, contradicting the approved bug-fix plan. A revised plan approval is required.",
+                                next_step="Revise and approve the plan as a feature task before continuing.",
+                            )
+                        ),
+                    }
+                _validate_candidate_proposal(proposal)
                 rt["pending_raw_diff"] = proposal.final_diff
                 rt["pending_repro_diff"] = proposal.reproduction_diff
                 return {
+                    **_sync_lane_state(rt["lane_state"]),
                     "budgets": budgets,
                     "messages": messages_out,
                     "evidence_refs": evidence_refs[-40:],
@@ -2253,6 +2508,7 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
                     "recovery_read_triggered": blocked_recovered,
                     "specialist_calls_used": spec_used,
                     "provider_metadata": last_tel,
+                    "v2_selection_stats": v2_stats,
                     "patch_loop_done": True,
                     "patch_turns_in_attempt": 0,
                 }
@@ -2260,6 +2516,29 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
                 ctx.usage(attempts_used=attempt)
                 fb_err = str(exc)
                 item = _remember(attempt, fb_err, stage="patch", what_was_tried=explanation)
+                is_out_of_scope_policy = any(
+                    term in fb_err.lower()
+                    for term in (
+                        "config mode only permits",
+                        "unapproved dependency",
+                        "exceeds scope",
+                    )
+                ) and "0 files, 0 changed lines" not in fb_err.lower()
+                if is_out_of_scope_policy:
+                    return {
+                        "budgets": budgets,
+                        "messages": messages_out,
+                        "specialist_calls_used": spec_used,
+                        "last_failure_category": FailureCategory.POLICY_BLOCK.value,
+                        "terminal_outcome": _serialize_execute_result(
+                            ExecuteResult(
+                                "out_of_scope",
+                                failure_code=FailureCode.POLICY_VIOLATION,
+                                failure_message=fb_err[:360],
+                                next_step="Revise the approved plan to cover the required scope or dependencies.",
+                            )
+                        ),
+                    }
                 is_hard_policy = any(
                     term in fb_err.lower()
                     for term in ("protected", "unsafe", "deletion", "unsupported file operation")
@@ -2291,7 +2570,7 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
                 )
 
         # Tool loop exited (via finish or max turns): compile overlay into proposal
-        _ensure_regression_test_in_overlay(overlay)
+        _ensure_regression_test_in_overlay(overlay, task_type=effective_task_type)
         repro_diff = overlay.reproduction_diff()
         final_diff = overlay.combined_diff()
         rt["candidate"] = RepairProposal(
@@ -2300,13 +2579,71 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
             final_diff=final_diff,
         )
         try:
-            validate_proposal(rt["candidate"], task.limits, task.base_sha)
+            vplan = plan_verification(
+                originals,
+                final_diff,
+                rt["lane_state"].triage,
+                set(declared_deps),
+                approved_plan=approved_plan,
+            )
+            rt["lane_state"] = dc_replace(rt["lane_state"], plan=vplan)
+            if (
+                effective_task_type == TaskType.BUG.value
+                and "feature_sized_diff_in_bug_mode" in vplan.patch_facts.override_reasons
+                and isinstance(approved_plan, dict)
+                and str(approved_plan.get("task_type") or "").strip().lower() == "bug"
+            ):
+                lane_state, _ = escalate(
+                    rt["lane_state"],
+                    EscalationReason.SCOPE_GROWTH,
+                    "Implementation diff is feature-sized, contradicting the approved bug-fix plan.",
+                    now_wall_ts=_now_wall_ts(),
+                )
+                return {
+                    **_sync_lane_state(lane_state),
+                    "budgets": budgets,
+                    "messages": messages_out,
+                    "specialist_calls_used": spec_used,
+                    "last_failure_category": FailureCategory.POLICY_BLOCK.value,
+                    "terminal_outcome": _serialize_execute_result(
+                        ExecuteResult(
+                            "out_of_scope",
+                            failure_code=FailureCode.POLICY_VIOLATION,
+                            failure_message="Implementation diff is feature-sized, contradicting the approved bug-fix plan. A revised plan approval is required.",
+                            next_step="Revise and approve the plan as a feature task before continuing.",
+                        )
+                    ),
+                }
+            _validate_candidate_proposal(rt["candidate"])
             if memory.repeated(rt["candidate"]):
                 raise ValueError("The tool-loop patch repeats an already rejected diff. Choose a materially different fix.")
         except ValueError as exc:
             ctx.usage(attempts_used=attempt)
             fb_err = str(exc)
             item = _remember(attempt, fb_err, stage="patch", what_was_tried=explanation)
+            is_out_of_scope_policy = any(
+                term in fb_err.lower()
+                for term in (
+                    "config mode only permits",
+                    "unapproved dependency",
+                    "exceeds scope",
+                )
+            ) and "0 files, 0 changed lines" not in fb_err.lower()
+            if is_out_of_scope_policy:
+                return {
+                    "budgets": budgets,
+                    "messages": messages_out,
+                    "specialist_calls_used": spec_used,
+                    "last_failure_category": FailureCategory.POLICY_BLOCK.value,
+                    "terminal_outcome": _serialize_execute_result(
+                        ExecuteResult(
+                            "out_of_scope",
+                            failure_code=FailureCode.POLICY_VIOLATION,
+                            failure_message=fb_err[:360],
+                            next_step="Revise the approved plan to cover the required scope or dependencies.",
+                        )
+                    ),
+                }
             is_hard_policy = any(
                 term in fb_err.lower()
                 for term in ("protected", "unsafe", "deletion", "unsupported file operation")
@@ -2340,6 +2677,7 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
             )
 
         return {
+            **_sync_lane_state(rt["lane_state"]),
             "budgets": budgets,
             "messages": messages_out,
             "evidence_refs": evidence_refs[-40:],
@@ -2353,6 +2691,7 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
             "recovery_read_triggered": blocked_recovered,
             "specialist_calls_used": spec_used,
             "provider_metadata": last_tel,
+            "v2_selection_stats": v2_stats,
             "patch_loop_done": True,
             "patch_turns_in_attempt": 0,
         }
@@ -2383,7 +2722,7 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
         strategy_override: str = "",
         specialist_calls_used: int | None = None,
     ) -> dict[str, Any]:
-        max_attempts = int(task.limits["maxRepairAttempts"])
+        max_attempts = int(effective_limits["maxRepairAttempts"])
         spec_cnt = int(
             specialist_calls_used
             if specialist_calls_used is not None
@@ -2467,7 +2806,7 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
                 final_diff=raw_final,
             )
         overlay = _rehydrate_overlay(state)
-        _ensure_regression_test_in_overlay(overlay)
+        _ensure_regression_test_in_overlay(overlay, task_type=effective_task_type)
         return RepairProposal(
             explanation=state.get("proposal_explanation", "Tool-guided repair."),
             reproduction_diff=overlay.reproduction_diff(),
@@ -2486,6 +2825,189 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
 
         ctx.artifact(f"attempt_{attempt:03d}_diff", ArtifactType.ATTEMPT_DIFF, proposal.final_diff, attempt)
         ctx.stage(TaskStage.REPRODUCE)
+
+        if effective_task_type == TaskType.CONFIG.value:
+            _safe_event(
+                ctx,
+                EventType.POLICY_CHECK,
+                "Validating configuration profile changes against allowlisted config profiles.",
+            )
+            try:
+                sections = diff_sections(proposal.final_diff)
+                if not sections:
+                    raise ValueError("Config proposal did not modify any allowlisted configuration file.")
+                for p_sec, b_sec in sections.items():
+                    if PurePosixPath(p_sec).name.startswith("test_") and p_sec.endswith(".py"):
+                        continue
+                    validate_config_profile_diff_section(p_sec, b_sec)
+            except ValueError as exc:
+                return {
+                    "budgets": budgets,
+                    "flaky_reruns_used": flaky_reruns,
+                    "last_failure_category": FailureCategory.POLICY_BLOCK.value,
+                    "terminal_outcome": _serialize_execute_result(
+                        ExecuteResult(
+                            "out_of_scope",
+                            failure_code=FailureCode.POLICY_VIOLATION,
+                            failure_message=str(exc)[:360],
+                            next_step="Restrict config task edits to allowlisted configuration profiles.",
+                        )
+                    ),
+                }
+            return {
+                "reproduced": True,
+                "flaky_reruns_used": flaky_reruns,
+                "strategy_action": "",
+                "budgets": budgets,
+            }
+
+        if effective_task_type == TaskType.REFACTOR.value:
+            _safe_event(
+                ctx,
+                EventType.TEST_RUN,
+                "Checking behavior-preserving characterization coverage and public export stability for refactor.",
+            )
+            cov_ok, uncovered_syms, unapproved_exports = _check_refactor_symbol_coverage_and_exports(
+                originals, proposal.final_diff, proposal.reproduction_diff, approved_plan
+            )
+            rt["refactor_coverage"] = (cov_ok, uncovered_syms, unapproved_exports)
+            if unapproved_exports:
+                exp_msg = (
+                    "Refactor modified or removed public exports without plan approval: "
+                    + ", ".join(unapproved_exports)
+                )
+                ctx.usage(attempts_used=attempt)
+                item = _remember(attempt, exp_msg, stage="reproduce", what_was_tried=proposal.explanation)
+                if attempt >= int(effective_limits["maxRepairAttempts"]):
+                    return {
+                        "budgets": budgets,
+                        "flaky_reruns_used": flaky_reruns,
+                        "last_failure_category": FailureCategory.POLICY_BLOCK.value,
+                        "terminal_outcome": _serialize_execute_result(
+                            ExecuteResult(
+                                "out_of_scope",
+                                failure_code=FailureCode.POLICY_VIOLATION,
+                                failure_message=exp_msg[:360],
+                                next_step="List intentional public API/export changes in the approved plan.",
+                            )
+                        ),
+                    }
+                rt.pop("pending_raw_diff", None)
+                rt.pop("pending_repro_diff", None)
+                return {
+                    **_advance_or_fail_attempt(
+                        state,
+                        budgets,
+                        attempt,
+                        FailureCategory.POLICY_BLOCK.value,
+                        exp_msg,
+                        diff_hash=state.get("overlay_diff_hash", ""),
+                        record_item=item,
+                    ),
+                    "flaky_reruns_used": flaky_reruns,
+                }
+
+            if proposal.reproduction_diff.strip():
+                regression_command = [*state["test_command"], "--", *diff_sections(proposal.reproduction_diff)]
+                reproduction = ctx.execute(
+                    commit_sha=task.base_sha,
+                    command=regression_command,
+                    patch=proposal.reproduction_diff,
+                )
+                repro_cat = classify(reproduction)
+                rt["reproduction_result"] = reproduction
+                if repro_cat == "missing_dep":
+                    rt["pending_infra_outcome"] = environment_outcome(repro_cat, reproduction)
+                    return {
+                        "budgets": budgets,
+                        "flaky_reruns_used": flaky_reruns,
+                        "last_failure_category": FailureCategory.ENV_MISSING_DEP.value,
+                        "last_failure_summary": output(reproduction)[-2000:],
+                        "strategy_action": "re_prepare_env",
+                    }
+                if repro_cat in INFRA_CATEGORIES:
+                    return {
+                        "budgets": budgets,
+                        "flaky_reruns_used": flaky_reruns,
+                        "last_failure_category": classify_failure(output(reproduction), exec_result=reproduction, stage="reproduce"),
+                        "terminal_outcome": _serialize_execute_result(environment_outcome(repro_cat, reproduction)),
+                    }
+                char_passed = passed(reproduction) and bool(re.search(r"\b(\d+) passed\b", reproduction.stdout or ""))
+                if not char_passed:
+                    ctx.usage(attempts_used=attempt)
+                    feedback = (
+                        "Refactor characterization tests must PASS on the original unpatched code before refactoring: "
+                        + output(reproduction)
+                    )
+                    item = _remember(
+                        attempt,
+                        feedback,
+                        exec_result=reproduction,
+                        stage="reproduce",
+                        what_was_tried=proposal.explanation,
+                    )
+                    rt.pop("pending_raw_diff", None)
+                    rt.pop("pending_repro_diff", None)
+                    return {
+                        **_advance_or_fail_attempt(
+                            state,
+                            budgets,
+                            attempt,
+                            item["category"],
+                            feedback,
+                            diff_hash=state.get("overlay_diff_hash", ""),
+                            artifact_id=f"attempt_{attempt:03d}_tests",
+                            record_item=item,
+                        ),
+                        "flaky_reruns_used": flaky_reruns,
+                    }
+
+            if not cov_ok:
+                ctx.usage(attempts_used=attempt)
+                cov_msg = (
+                    "Refactor touched symbols lack characterization test coverage: "
+                    + ", ".join(uncovered_syms)
+                    + ". Add characterization tests that pass on the original code."
+                )
+                item = _remember(attempt, cov_msg, stage="reproduce", what_was_tried=proposal.explanation)
+                if attempt >= int(effective_limits["maxRepairAttempts"]):
+                    return {
+                        "budgets": budgets,
+                        "flaky_reruns_used": flaky_reruns,
+                        "last_failure_category": FailureCategory.NO_REPRO.value,
+                        "terminal_outcome": _serialize_execute_result(
+                            ExecuteResult(
+                                "needs_clarification",
+                                failure_code=FailureCode.NOT_REPRODUCED,
+                                failure_message=(
+                                    f"Insufficient test coverage to verify behavior preservation for refactored symbols: {', '.join(uncovered_syms)}."
+                                )[:360],
+                                next_step="Add characterization tests for the target symbols or clarify expected behavior.",
+                            )
+                        ),
+                    }
+                rt.pop("pending_raw_diff", None)
+                rt.pop("pending_repro_diff", None)
+                return {
+                    **_advance_or_fail_attempt(
+                        state,
+                        budgets,
+                        attempt,
+                        FailureCategory.NO_REPRO.value,
+                        cov_msg,
+                        diff_hash=state.get("overlay_diff_hash", ""),
+                        record_item=item,
+                    ),
+                    "flaky_reruns_used": flaky_reruns,
+                }
+
+            return {
+                "reproduced": True,
+                "flaky_reruns_used": flaky_reruns,
+                "strategy_action": "",
+                "budgets": budgets,
+            }
+
         _safe_event(
             ctx,
             EventType.TEST_RUN,
@@ -2600,6 +3122,22 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
         proposal = _current_proposal(state)
         rt["candidate"] = rt.get("candidate") or proposal
 
+        env_rebuilt = bool(state.get("environment_rebuilt", False))
+        touched_req_files = [
+            p for p in diff_sections(proposal.final_diff) if is_allowed_requirements_file(p)
+        ]
+        if touched_req_files and allowed_dep_changes:
+            prep_hook = getattr(ctx, "prepare_environment", None)
+            if callable(prep_hook):
+                ctx.prepare_dependencies = True
+                prep_hook(sorted({*declared_deps, *allowed_dep_changes}))
+            env_rebuilt = True
+            _safe_event(
+                ctx,
+                EventType.INFO,
+                "Rebuilt sandbox environment with approved plan dependencies (binary wheels only; network disabled for tests).",
+            )
+
         ctx.stage(TaskStage.PATCH)
         _safe_event(ctx, EventType.TOOL_CALL, "Applying the proposed fix only inside a fresh Docker sandbox.")
         ctx.stage(TaskStage.TEST)
@@ -2634,6 +3172,7 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
             return {
                 "budgets": budgets,
                 "flaky_reruns_used": flaky_reruns,
+                "environment_rebuilt": env_rebuilt,
                 "last_failure_category": FailureCategory.ENV_MISSING_DEP.value,
                 "last_failure_summary": output(final)[-2000:],
                 "strategy_action": "re_prepare_env",
@@ -2642,6 +3181,7 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
             return {
                 "budgets": budgets,
                 "flaky_reruns_used": flaky_reruns,
+                "environment_rebuilt": env_rebuilt,
                 "last_failure_category": classify_failure(output(final), exec_result=final, stage="verify"),
                 "terminal_outcome": _serialize_execute_result(environment_outcome(final_cat, final)),
             }
@@ -2684,11 +3224,13 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
                     record_item=item,
                 ),
                 "flaky_reruns_used": flaky_reruns,
+                "environment_rebuilt": env_rebuilt,
             }
         return {
             "verification_passed": True,
             "tests_run_count": sum(map(int, tests)),
             "flaky_reruns_used": flaky_reruns,
+            "environment_rebuilt": env_rebuilt,
             "strategy_action": "",
             "budgets": budgets,
         }
@@ -2705,7 +3247,11 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
         t_cmd = list(branch_state.get("test_command") or test_command)
         budgets = dict(branch_state.get("budgets") or {})
 
-        cand_overlay = WorkspaceOverlay(base_sha=task.base_sha, originals=originals)
+        cand_overlay = WorkspaceOverlay(
+            base_sha=task.base_sha,
+            originals=originals,
+            allow_requirements=bool(allowed_dep_changes),
+        )
         prompt = _build_repair_prompt(
             rt["context"],
             str(branch_state.get("last_failure_summary") or ""),
@@ -2735,8 +3281,14 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
                     cand_overlay.apply_edit(ed.path, ed.old_text, ed.new_text)
                 for tst in parsed.tests:
                     cand_overlay.create_file(tst.path, tst.content, is_test=True)
-            validate_proposal(proposal, task.limits, task.base_sha)
-            vplan = plan_verification(originals, proposal.final_diff, rt["lane_state"].triage, set(declared_deps))
+            _validate_candidate_proposal(proposal)
+            vplan = plan_verification(
+                originals,
+                proposal.final_diff,
+                rt["lane_state"].triage,
+                set(declared_deps),
+                approved_plan=approved_plan,
+            )
             repro_cmd = [*t_cmd, "--", *diff_sections(proposal.reproduction_diff)]
             repro_res = ctx.execute(
                 commit_sha=task.base_sha,
@@ -3127,6 +3679,65 @@ Return QualityReview."""
             + json.dumps(rev_dict, indent=2)
         )
         lane_state = rt.get("lane_state")
+        cov_tuple = rt.get("refactor_coverage") or (True, [], [])
+        has_phase4_plan_fields = isinstance(approved_plan, dict) and any(
+            k in approved_plan
+            for k in ("task_type", "spec", "acceptance_criteria", "expected_files", "dependency_changes", "plan_hash")
+        )
+        include_extended_verification = (
+            effective_task_type != TaskType.BUG.value
+            or bool(allowed_dep_changes)
+            or bool(state.get("environment_rebuilt", False))
+            or bool(state.get("v2_selection_stats"))
+            or has_phase4_plan_fields
+        )
+        full_verification_check: dict[str, Any] = {
+            "reproduced": True,
+            "regressionPassed": True,
+            "testsRun": int(state.get("tests_run_count", 1) or 1),
+            "newFailures": [],
+            "taskType": effective_task_type,
+            "baselinePassed": bool(state.get("baseline_passed", True)),
+            "touchedSymbolsCovered": bool(cov_tuple[0]),
+            "unapprovedExportChanges": list(cov_tuple[2]),
+            "configProfileValidated": (effective_task_type == TaskType.CONFIG.value),
+            "approvedDependencyChanges": list(allowed_dep_changes),
+            "environmentRebuilt": bool(state.get("environment_rebuilt", False)),
+            "v2Selection": state.get("v2_selection_stats") or {},
+        }
+        try:
+            validate_fix(
+                publishable,
+                effective_limits,
+                full_verification_check,
+                task.base_sha,
+                require_regression=False,
+                allow_static_oracle=False,
+                task_type=effective_task_type,
+                allowed_dependency_changes=allowed_dep_changes,
+            )
+        except ValueError as exc:
+            return {
+                "budgets": budgets,
+                "terminal_outcome": _serialize_execute_result(
+                    ExecuteResult(
+                        "out_of_scope",
+                        failure_code=FailureCode.POLICY_VIOLATION,
+                        failure_message=str(exc)[:360],
+                        next_step="Revise the plan or patch to satisfy mode-specific verification and scope gates.",
+                    )
+                ),
+            }
+        verification_payload: dict[str, Any] = (
+            full_verification_check
+            if include_extended_verification
+            else {
+                "reproduced": True,
+                "regressionPassed": True,
+                "testsRun": int(state.get("tests_run_count", 1) or 1),
+                "newFailures": [],
+            }
+        )
         summary_payload: dict[str, Any] = {
             "filesChanged": len(diff_sections(publishable)),
             "linesAdded": sum(
@@ -3146,6 +3757,12 @@ Return QualityReview."""
                 else "Not a detected Streamlit UI repair"
             ),
         }
+        if include_extended_verification:
+            summary_payload["taskType"] = effective_task_type
+            summary_payload["planRef"] = plan_ref
+            summary_payload["approvedDependencyChanges"] = list(allowed_dep_changes)
+            summary_payload["environmentRebuilt"] = bool(state.get("environment_rebuilt", False))
+            summary_payload["v2Selection"] = state.get("v2_selection_stats") or {}
         if lanes_on and lane_state is not None:
             summary_payload["lane"] = "full"
             summary_payload["verificationLevel"] = "V3"
@@ -3157,12 +3774,7 @@ Return QualityReview."""
             final_diff=publishable,
             final_tests=transcript,
             summary=summary_payload,
-            verification={
-                "reproduced": True,
-                "regressionPassed": True,
-                "testsRun": int(state.get("tests_run_count", 1) or 1),
-                "newFailures": [],
-            },
+            verification=verification_payload,
         )
         return {
             "budgets": budgets,
@@ -3524,10 +4136,13 @@ Return QualityReview."""
             "lane": lane_state.current_lane.value,
             "risk_floor": lane_state.risk_floor.value,
             "triage_report": lane_state.triage.to_dict(),
+            "plan_ref": plan_ref,
             "verification_plan": None,
             "oracle_evidence": None,
             "escalations": [],
             "fast_usage": lane_state.to_fast_usage_dict(_now_wall_ts()),
+            "v2_selection_stats": {},
+            "environment_rebuilt": False,
             "hypotheses": [],
             "candidate_branches": [],
             "specialist_calls_used": int(existing_task_budgets.get("specialistCalls", 0)),

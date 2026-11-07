@@ -916,7 +916,13 @@ def test_lanes_policy_or_flag_mismatch_on_resume_forces_full_lane_and_never_down
 
     # Crash right before fast_review (with fast patch + oracle evidence in checkpoint under al.v1)
     with pytest.raises(RuntimeError, match="Simulated crash before node fast_review"):
-        run_repair_graph(task_obj, ctx_w1, w1_router, crash_before_node="fast_review")
+        run_repair_graph(
+            task_obj,
+            ctx_w1,
+            w1_router,
+            crash_before_node="fast_review",
+            lanes_policy_version="al.v1",
+        )
 
     # Simulate code upgrade to lanes_policy_version="al.v2" before resume
     clock.advance(10)

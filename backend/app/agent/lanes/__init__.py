@@ -5,6 +5,10 @@ from app.agent.lanes.escalation import (
     escalate,
     record_fast_usage,
 )
+from app.agent.lanes.import_graph import (
+    V2SelectionResult,
+    select_tests_v2,
+)
 from app.agent.lanes.oracle import (
     ORACLE_GATE_MARKER,
     ORACLE_ORIG_MARKER,
@@ -21,6 +25,7 @@ from app.agent.lanes.triage import (
     STDLIB_MODULES,
     STDLIB_SYMBOL_OWNERS,
     analyze_python_source,
+    classify_task_type,
     is_override_path,
     triage_repository,
 )
@@ -35,10 +40,13 @@ from app.agent.lanes.types import (
     OracleEvidence,
     PatchFacts,
     RiskFloor,
+    TASK_TYPE_CAUTION_ORDER,
+    TaskType,
     TriageReport,
     VerificationLevel,
     VerificationPlan,
     max_risk,
+    refine_task_type,
 )
 
 __all__ = [
@@ -58,19 +66,25 @@ __all__ = [
     "RiskFloor",
     "STDLIB_MODULES",
     "STDLIB_SYMBOL_OWNERS",
+    "TASK_TYPE_CAUTION_ORDER",
+    "TaskType",
     "TriageReport",
+    "V2SelectionResult",
     "VerificationLevel",
     "VerificationPlan",
     "analyze_python_source",
     "apply_unified_diff",
     "build_oracle_command",
     "check_fast_budget",
+    "classify_task_type",
     "escalate",
     "is_oracle_evidence_valid",
     "is_override_path",
     "max_risk",
     "plan_verification",
     "record_fast_usage",
+    "refine_task_type",
     "run_oracle_verification",
+    "select_tests_v2",
     "triage_repository",
 ]

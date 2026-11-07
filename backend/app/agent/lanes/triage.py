@@ -12,8 +12,10 @@ from typing import Any
 from app.agent.lanes.types import (
     LaneName,
     RiskFloor,
+    TaskType,
     TriageReport,
     max_risk,
+    refine_task_type,
 )
 
 BUILTIN_NAMES: frozenset[str] = frozenset(dir(builtins)) | {
@@ -153,6 +155,136 @@ _SECRETS_CONTENT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AIza[0-9A-Za-z_\-]{30,}|sk-[A-Za-z0-9_\-]{20,})\b"),
     re.compile(r"(?i)\b(?:api[_-]?key|secret[_-]?key|client[_-]?secret|private[_-]?key|access[_-]?token|password|passwd)\s*=\s*['\"][^'\"]{4,}['\"]"),
 )
+
+_CONFIG_PROFILE_NAMES: frozenset[str] = frozenset({
+    ".flake8",
+    ".gitignore",
+    ".editorconfig",
+    ".python-version",
+    "pytest.ini",
+    "ruff.toml",
+    ".ruff.toml",
+    "mypy.ini",
+    ".mypy.ini",
+    ".coveragerc",
+})
+
+_UNCLEAR_EXPLICIT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"(?is)^\s*(?:\?+|tbd|todo|n/?a|none|help|fix\s+it|broken|doesn'?t\s+work|it\s+is\s+broken|not\s+working|something\s+is\s+wrong|please\s+fix)"
+        r"(?:[\s.!?]+(?:\?+|tbd|todo|n/?a|none|help|fix\s+it|broken|doesn'?t\s+work|it\s+is\s+broken|not\s+working|something\s+is\s+wrong|please\s+fix))*\s*[.!?]*\s*$"
+    ),
+    re.compile(r"(?i)\b(?:need(?:s)?\s+clarification|unclear\s+requirements?|requirements?\s+are\s+ambiguous|not\s+sure\s+what\s+should\s+happen)\b"),
+)
+
+_FEATURE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?i)\b(?:new\s+feature|feature\s+request)\b"),
+    re.compile(r"(?i)^\s*(?:feat(?:\([^)]+\))?:|feature:|enhancement:)"),
+    re.compile(r"(?i)\b(?:implement\s+(?:a\s+)?new|introduce\s+(?:a\s+)?new|add\s+support\s+for|support\s+new)\b"),
+    re.compile(
+        r"(?i)\b(?:add|create|build|implement)\s+(?:a\s+|an\s+|the\s+)?(?:new\s+)?"
+        r"(?:endpoint|route|cli\s+flag|command(?:\s+line)?\s+flag|flag|subcommand|option|exporter|webhook\s+endpoint|handler|feature|capability|api\s+method|public\s+function|class|module)\b"
+    ),
+)
+
+_REFACTOR_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?i)^\s*(?:refactor(?:\([^)]+\))?:)"),
+    re.compile(r"(?i)\b(?:refactor|refactoring|restructure|reorganize|deduplicate|behavior-preserving|preserve\s+existing\s+behavior)\b"),
+    re.compile(r"(?i)\b(?:extract\s+(?:a\s+)?(?:helper|function|method|class)|rename\s+(?:the\s+)?(?:helper|function|method|class|symbol|variable))\b"),
+)
+
+_CONFIG_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?i)^\s*(?:config(?:\([^)]+\))?:|chore\(config\):)"),
+    re.compile(
+        r"(?i)\b(?:update|configure|edit|add|set)\s+(?:the\s+)?"
+        r"(?:\.flake8|\.gitignore|\.editorconfig|\.python-version|pytest\.ini|ruff\.toml|\.ruff\.toml|mypy\.ini|\.mypy\.ini|\.coveragerc)\b"
+    ),
+)
+
+_BUG_SIGNAL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?i)\b(?:bug|fix|error|exception|traceback|crash|fails?|failing|broken|incorrect|wrong|regression|nameerror|typeerror|valueerror|keyerror|importerror|attributeerror|indexerror|zerodivisionerror|timeout|unhandled|missing\s+import|unused\s+import)\b"),
+)
+
+
+def classify_task_type(
+    issue_text: str,
+    profile: Any = None,
+    originals: dict[str, str] | None = None,
+    plan: dict[str, Any] | None = None,
+) -> tuple[TaskType, TaskType, tuple[str, ...]]:
+    """Deterministically classify task type and apply monotonic LLM caution floor."""
+    signals: list[str] = []
+    text = (issue_text or "").strip()
+    norm = text.replace("\\", "/")
+    orig_map = originals or {}
+
+    plan_files: list[str] = []
+    if isinstance(plan, dict):
+        for key in ("expected_files", "expectedFiles", "likely_files", "likelyFiles", "filesToInspect", "files"):
+            val = plan.get(key)
+            if isinstance(val, list):
+                plan_files.extend(re.sub(r"^(?:\./)+", "", str(item).replace("\\", "/").strip()) for item in val if item)
+
+    # Check if issue or plan targets only config profile files
+    mentioned_config_profiles = [
+        name for name in _CONFIG_PROFILE_NAMES
+        if re.search(rf"(?i)(?:^|[\s`'\"/]){re.escape(name)}(?:$|[\s`'\",.:;)])", norm)
+    ]
+    plan_only_config = bool(plan_files) and all(
+        PurePosixPath(p).name.casefold() in _CONFIG_PROFILE_NAMES for p in plan_files
+    )
+    mentions_py_file = bool(re.search(r"\b[\w./-]+\.py\b", norm)) or any(p.endswith(".py") for p in plan_files)
+
+    has_bug_signal = any(p.search(norm) for p in _BUG_SIGNAL_PATTERNS)
+    is_missing_import_fix = bool(re.search(r"(?i)\b(?:add|fix)\s+(?:missing\s+)?[\w.]+\s+import\b|\b(?:add|fix)\s+import\s+[\w.]+\b", norm))
+
+    if any(p.search(norm) for p in _UNCLEAR_EXPLICIT_PATTERNS):
+        candidate = TaskType.UNCLEAR
+        signals.append("task_type_deterministic:unclear_explicit")
+    elif not norm and not orig_map and not plan_files:
+        candidate = TaskType.UNCLEAR
+        signals.append("task_type_deterministic:empty_issue")
+    elif (
+        (any(p.search(norm) for p in _CONFIG_PATTERNS) or plan_only_config or (mentioned_config_profiles and not mentions_py_file))
+        and not is_missing_import_fix
+    ):
+        candidate = TaskType.CONFIG
+        signals.append("task_type_deterministic:config")
+    elif any(p.search(norm) for p in _FEATURE_PATTERNS) and not is_missing_import_fix:
+        candidate = TaskType.FEATURE
+        signals.append("task_type_deterministic:feature")
+    elif any(p.search(norm) for p in _REFACTOR_PATTERNS) and not is_missing_import_fix:
+        candidate = TaskType.REFACTOR
+        signals.append("task_type_deterministic:refactor")
+    elif norm and len(norm.split()) <= 1 and not mentions_py_file and not has_bug_signal and not plan_files:
+        candidate = TaskType.UNCLEAR
+        signals.append("task_type_deterministic:under_specified")
+    else:
+        candidate = TaskType.BUG
+        signals.append("task_type_deterministic:bug")
+
+    llm_proposed: str | TaskType | None = None
+    if isinstance(plan, dict):
+        if plan.get("needs_more_information") is True or plan.get("needsMoreInformation") is True:
+            llm_proposed = TaskType.UNCLEAR
+        else:
+            raw_type = plan.get("task_type") or plan.get("taskType")
+            if isinstance(raw_type, (str, TaskType)):
+                llm_proposed = raw_type
+
+    floor = refine_task_type(candidate, llm_proposed)
+    if llm_proposed is not None:
+        try:
+            parsed_llm = llm_proposed if isinstance(llm_proposed, TaskType) else TaskType(str(llm_proposed).strip().lower())
+        except ValueError:
+            parsed_llm = None
+        if parsed_llm is not None:
+            if floor != candidate:
+                signals.append(f"llm_task_type_refined:{candidate.value}->{floor.value}")
+            elif parsed_llm != candidate:
+                signals.append(f"llm_task_type_downgrade_ignored:{parsed_llm.value}->{candidate.value}")
+
+    return candidate, floor, tuple(dict.fromkeys(signals))
 
 
 @dataclass(frozen=True)
@@ -658,13 +790,34 @@ def triage_repository(
         signals.append("no_prepatch_static_oracle_witness")
         risk_floor = max_risk(risk_floor, RiskFloor.MEDIUM)
 
+    # 5. Deterministic task-type classification + monotonic LLM caution floor
+    task_type_candidate, task_type_floor, type_signals = classify_task_type(
+        issue_text=issue_text,
+        profile=profile,
+        originals=originals,
+        plan=plan,
+    )
+    signals.extend(type_signals)
+    if task_type_candidate != TaskType.BUG or task_type_floor != TaskType.BUG:
+        override_reasons.append(f"non_bug_task_type:{task_type_floor.value}")
+        risk_floor = max_risk(
+            risk_floor,
+            RiskFloor.HIGH if task_type_floor == TaskType.UNCLEAR else RiskFloor.MEDIUM,
+        )
+
+    if isinstance(plan, dict) and plan.get("dependency_changes") or (isinstance(plan, dict) and plan.get("dependencyChanges")):
+        override_reasons.append("new_third_party_dependency")
+        risk_floor = max_risk(risk_floor, RiskFloor.HIGH)
+
     dedup_overrides = tuple(dict.fromkeys(override_reasons))
     dedup_signals = tuple(dict.fromkeys(signals))
 
     candidate_lane = (
         LaneName.FAST
         if (
-            risk_floor == RiskFloor.LOW
+            task_type_candidate == TaskType.BUG
+            and task_type_floor == TaskType.BUG
+            and risk_floor == RiskFloor.LOW
             and not dedup_overrides
             and not uncertain
             and eligible_witness
@@ -681,4 +834,6 @@ def triage_repository(
         signals=dedup_signals,
         override_reasons=dedup_overrides,
         uncertain_localization=uncertain,
+        task_type_candidate=task_type_candidate,
+        task_type_floor=task_type_floor,
     )

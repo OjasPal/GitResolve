@@ -503,6 +503,18 @@ def execute_tool_action(
             if not ok:
                 return _finalize(ctx, started, False, action, target, perr, perr, act_hash, ev_id, attempt)
             valid_targets.append(norm)
+        v2_info: dict[str, Any] = {}
+        if not valid_targets:
+            from app.agent.lanes.import_graph import select_tests_v2
+            changed_paths = [
+                str(rec.get("path") or "")
+                for rec in overlay.serialize_edits()
+                if rec.get("path")
+            ]
+            v2_res = select_tests_v2(files, changed_paths)
+            v2_info = v2_res.to_dict()
+            if v2_res.used_v2 and v2_res.selected_tests:
+                valid_targets = list(v2_res.selected_tests[:8])
         if valid_targets:
             cmd = [*cmd, "--", *valid_targets]
         res = ctx.execute(
@@ -513,6 +525,9 @@ def execute_tool_action(
         combined_out = redact(((res.stdout or "") + "\n" + (res.stderr or "")).strip()[-2400:], 2400)
         ok_run = res.status == "passed" and res.exit_code == 0 and not res.oom_killed and res.cleanup_ok
         summary = f"Sandbox pytest exit_code={res.exit_code} status={res.status}."
+        extra_meta: dict[str, Any] = {"exit_code": res.exit_code, "status": res.status}
+        if v2_info:
+            extra_meta["v2Selection"] = v2_info
         return _finalize(
             ctx,
             started,
@@ -524,7 +539,7 @@ def execute_tool_action(
             act_hash,
             ev_id,
             attempt,
-            extra={"exit_code": res.exit_code, "status": res.status},
+            extra=extra_meta,
         )
 
     if action == "run_check":

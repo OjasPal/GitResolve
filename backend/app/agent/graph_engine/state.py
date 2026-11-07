@@ -154,6 +154,9 @@ class RepairState(TypedDict):
     oracle_evidence: NotRequired[dict[str, Any] | None]
     escalations: list[dict[str, Any]]
     fast_usage: NotRequired[dict[str, Any]]
+    plan_ref: NotRequired[dict[str, Any]]
+    v2_selection_stats: NotRequired[dict[str, Any]]
+    environment_rebuilt: NotRequired[bool]
 
     # Investigation & localization state
     hypotheses: list[str]

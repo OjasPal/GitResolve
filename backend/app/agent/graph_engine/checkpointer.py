@@ -104,6 +104,7 @@ class SqliteRepairCheckpointer(InMemorySaver):
                     adaptive_lanes_mode TEXT NOT NULL DEFAULT 'on',
                     lane_policy_mismatch INTEGER NOT NULL DEFAULT 0,
                     lane_policy_mismatch_reason TEXT NOT NULL DEFAULT '',
+                    pinned_plan_hash TEXT NOT NULL DEFAULT '',
                     storage_blob BLOB NOT NULL,
                     writes_blob BLOB NOT NULL,
                     blobs_blob BLOB NOT NULL,
@@ -116,6 +117,7 @@ class SqliteRepairCheckpointer(InMemorySaver):
                 "ALTER TABLE repair_checkpoints ADD COLUMN adaptive_lanes_mode TEXT NOT NULL DEFAULT 'on'",
                 "ALTER TABLE repair_checkpoints ADD COLUMN lane_policy_mismatch INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE repair_checkpoints ADD COLUMN lane_policy_mismatch_reason TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE repair_checkpoints ADD COLUMN pinned_plan_hash TEXT NOT NULL DEFAULT ''",
             ):
                 try:
                     conn.execute(col_sql)
@@ -138,9 +140,10 @@ class SqliteRepairCheckpointer(InMemorySaver):
         schema_version: str = CHECKPOINT_SCHEMA_VERSION,
         lanes_policy_version: str = LANES_POLICY_VERSION,
         adaptive_lanes_mode: str | None = None,
+        pinned_plan_hash: str = "",
         check_fence: bool = True,
     ) -> dict[str, Any]:
-        """Verify an existing thread's pinned engine/schema/base_sha/lane-policy or register a new pin."""
+        """Verify an existing thread's pinned engine/schema/base_sha/lane-policy/plan_hash or register a new pin."""
         with self._lock:
             if check_fence:
                 self._enforce_fence()
@@ -163,9 +166,21 @@ class SqliteRepairCheckpointer(InMemorySaver):
                         f"Base commit SHA mismatch for {thread_id}: "
                         f"stored={existing.get('base_sha')}, requested={base_sha}"
                     )
+                if (
+                    pinned_plan_hash
+                    and existing.get("pinned_plan_hash")
+                    and existing.get("pinned_plan_hash") != pinned_plan_hash
+                ):
+                    raise CheckpointCompatibilityError(
+                        f"Approved plan hash mismatch for {thread_id}: "
+                        f"stored={existing.get('pinned_plan_hash')}, requested={pinned_plan_hash}"
+                    )
                 changed = False
                 if base_sha and not existing.get("base_sha"):
                     existing["base_sha"] = base_sha
+                    changed = True
+                if pinned_plan_hash and not existing.get("pinned_plan_hash"):
+                    existing["pinned_plan_hash"] = pinned_plan_hash
                     changed = True
 
                 stored_policy = existing.get("lanes_policy_version") or LANES_POLICY_VERSION
@@ -195,6 +210,7 @@ class SqliteRepairCheckpointer(InMemorySaver):
                 "adaptive_lanes_mode": current_al_mode,
                 "lane_policy_mismatch": False,
                 "lane_policy_mismatch_reason": "",
+                "pinned_plan_hash": pinned_plan_hash,
             }
             self._thread_pins[thread_id] = pin
             self._persist_thread(thread_id)
@@ -262,6 +278,7 @@ class SqliteRepairCheckpointer(InMemorySaver):
                 "adaptive_lanes_mode": str(row["adaptive_lanes_mode"]) if "adaptive_lanes_mode" in row_keys else "on",
                 "lane_policy_mismatch": bool(row["lane_policy_mismatch"]) if "lane_policy_mismatch" in row_keys else False,
                 "lane_policy_mismatch_reason": str(row["lane_policy_mismatch_reason"]) if "lane_policy_mismatch_reason" in row_keys else "",
+                "pinned_plan_hash": str(row["pinned_plan_hash"]) if "pinned_plan_hash" in row_keys else "",
             }
             stored_ns_map: dict[str, dict[str, Any]] = pickle.loads(row["storage_blob"])
             ns_default: defaultdict[str, dict[str, Any]] = defaultdict(dict)
@@ -309,8 +326,9 @@ class SqliteRepairCheckpointer(InMemorySaver):
                         thread_id, pinned_engine, schema_version, base_sha,
                         lanes_policy_version, adaptive_lanes_mode,
                         lane_policy_mismatch, lane_policy_mismatch_reason,
+                        pinned_plan_hash,
                         storage_blob, writes_blob, blobs_blob, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(thread_id) DO UPDATE SET
                         pinned_engine = excluded.pinned_engine,
                         schema_version = excluded.schema_version,
@@ -319,6 +337,7 @@ class SqliteRepairCheckpointer(InMemorySaver):
                         adaptive_lanes_mode = excluded.adaptive_lanes_mode,
                         lane_policy_mismatch = excluded.lane_policy_mismatch,
                         lane_policy_mismatch_reason = excluded.lane_policy_mismatch_reason,
+                        pinned_plan_hash = excluded.pinned_plan_hash,
                         storage_blob = excluded.storage_blob,
                         writes_blob = excluded.writes_blob,
                         blobs_blob = excluded.blobs_blob,
@@ -333,6 +352,7 @@ class SqliteRepairCheckpointer(InMemorySaver):
                         pin.get("adaptive_lanes_mode", "on"),
                         1 if pin.get("lane_policy_mismatch") else 0,
                         pin.get("lane_policy_mismatch_reason", ""),
+                        pin.get("pinned_plan_hash", ""),
                         storage_bytes,
                         writes_bytes,
                         blobs_bytes,
@@ -542,6 +562,7 @@ class StoreRepairCheckpointer(SqliteRepairCheckpointer):
                 "adaptive_lanes_mode": str(doc.get("adaptiveLanesMode") or "on"),
                 "lane_policy_mismatch": bool(doc.get("lanePolicyMismatch", False)),
                 "lane_policy_mismatch_reason": str(doc.get("lanePolicyMismatchReason", "")),
+                "pinned_plan_hash": str(doc.get("pinnedPlanHash", "")),
             }
             stored_ns_map: dict[str, dict[str, Any]] = self._decode_blob(str(doc.get("storageB64", "")))
             ns_default: defaultdict[str, dict[str, Any]] = defaultdict(dict)
@@ -595,6 +616,7 @@ class StoreRepairCheckpointer(SqliteRepairCheckpointer):
                 "adaptiveLanesMode": pin.get("adaptive_lanes_mode", "on"),
                 "lanePolicyMismatch": bool(pin.get("lane_policy_mismatch", False)),
                 "lanePolicyMismatchReason": str(pin.get("lane_policy_mismatch_reason", "")),
+                "pinnedPlanHash": str(pin.get("pinned_plan_hash", "")),
                 "hasCheckpoint": has_cp,
                 "storageB64": storage_b64,
                 "writesB64": writes_b64,

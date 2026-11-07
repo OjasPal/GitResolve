@@ -1,26 +1,26 @@
-# Handoff — 2026-11-07 — Phase 3 + Live Multi-Layer Repo & Recovery Hardening
+# Handoff — 2026-11-07 — Phase 4 Complete
 
 ## Branch and commits
 - Branch: `agent/workflow-optimization`
-- Prior commits: Phase 0 `21232ed`, Phase 1 `dfe0c8c`, speed `18c6da9`, Adaptive Lanes `9834328`, Phase 2A `9313144`, Phase 2B `42cb81f`, Phase 3 `6d02f65`, UI brief `9790052`.
+- Prior commits: Phase 0 `21232ed`, Phase 1 `dfe0c8c`, speed `18c6da9`, Adaptive Lanes `9834328`, Phase 2A `9313144`, Phase 2B `42cb81f`, Phase 3 `6d02f65`, UI brief `9790052`, live recovery hardening `dd44dfd`.
 
 ## Working state and validation
-- Implemented Phase 3 single-taxonomy failure classifier (`FailureCategory`, `classify_failure` in `agent/attempt_memory.py`), lane-aware strategy router edges, full-lane `specialist_reflect` (`gemini-4-argon`, capped at 2/task across resume), per-model `ProviderHealth` circuit breakers, Google-only routing, and optional `GITRESOLVE_BEST_OF_N`.
-- Hardened live execution after `OjasPal/PromptCraft` webhook issue (`tsk_e652ba14a0776c4f0d23`) post-Phase-3 regression:
-  - Wrapped `patch_node` context-recovery `_invoke_router_normal` (`engine.py`) and `Worker.process` (`runner.py`) in `(ProviderError, AllProvidersFailedError)` handlers returning `infra_retry` (`FailureCode.LLM_UNAVAILABLE`) so provider timeouts never fall through to `public_error(exc)` (`Reference: <hex>`).
-  - Capped SDK `ThinkingConfig(thinking_level="LOW")` in `GoogleGenAIProvider.generate` when `schema is not None and len(str(prompt)) > 12000` to prevent Vertex AI constrained JSON decoding from stalling into 58s `504 DEADLINE_EXCEEDED` timeouts on large repo prompts.
-  - Updated `EditProposal.actionable_or_blocked`, `repository_context` (including `.ts`/`.tsx` and full files `<= 100` lines), `_referenced_files`, and `_expand_context_for_files` so multi-layer repos solve cleanly on Call 1 (`8.49s` on `OjasPal/PromptCraft`).
-- Validation:
-  - `.venv/Scripts/python.exe -m pytest backend/tests/unit/test_phase_3.py backend/tests/unit/test_repair_runner.py backend/tests/unit/test_phase_2a_graph.py backend/tests/unit/test_phase_2b_recovery.py backend/tests/unit/test_adaptive_lanes.py backend/tests/unit/test_attempt_learning.py backend/tests/agent/test_router.py backend/tests/agent/test_recovery.py backend/tests/agent/test_quota_handling.py -q --tb=short` -> **116 passed in 10.53s**
+- Completed **Phase 4**:
+  - Bumped `LANES_POLICY_VERSION = "al.v2"`; in-flight `al.v1` checkpoints migrate to `FULL` lane + `RiskFloor.HIGH` on resume. Pinned `pinned_plan_hash` in `SqliteRepairCheckpointer` and `StoreRepairCheckpointer`.
+  - Added deterministic `TaskType` (`bug | feature | refactor | config | unclear`) and monotonic `refine_task_type` in `triage.py`. Fast lane remains strictly bug-only; `unclear` routes to `needs_clarification` (0 attempts). Post-patch planner detects `feature_sized_diff_in_bug_mode` and stops for plan revision when an approved bug plan produces a feature-sized diff.
+  - Added feature planning subgraph (`spec -> acceptance_criteria -> file_plan -> await_start`) in `agent/graph.py`, `compute_plan_hash`, `validate_plan_scope`, and `derive_limits(approved_plan, HARD_CAPS)` using `min()`.
+  - Added mode-aware `validate_fix` (`policy.py`) and `validate_publication` (`publication_patch.py`) for `bug`, `feature`, `refactor` (pass-before/after + touched-symbol coverage + export stability), and `config` (`ALLOWED_CONFIG_PROFILES`), forcing `allow_static_oracle = False` for all non-bug modes.
+  - Added default-deny `allowed_dependency_changes` in `requirements*.txt` (exact `package==version` + reason, wheel-only `prepare_environment` rebuild in `verify_node`, `FULL` lane + `V3`).
+  - Added V2 conservative AST import-graph selective pytest (`import_graph.py`) for inner-loop `run_tests`, while final `verify_node` stays `V3` (full suite).
+- Validation (0 live LLM tokens):
+  - `.venv/Scripts/python.exe -m pytest backend/tests/unit/test_phase_4.py -q --tb=short` -> **28 passed in 3.14s**
+  - `.venv/Scripts/python.exe -m pytest backend/tests/unit -q --tb=short` -> **310 passed in 26.66s**
+  - `.venv/Scripts/python.exe -m pytest backend/tests/agent -q --tb=short` -> **30 passed in 0.63s**
 
 ## Remaining work
-- Phase 4: Feature/refactor/config task types and import-graph V2 selective pytest.
-- Phase 5: Live evaluation harness and end-to-end safety audit.
+- Phase 5: Live evaluation harness, benchmark suite, and end-to-end safety audit.
 
 ## Gotchas
-- `ProviderHealth` circuit breaker state is strictly environmental/process-local and forbidden in checkpoints (`_FORBIDDEN_STATE_KEYS`).
-- Large structured-output prompts (`schema` + `>12KB`) must use `LOW` SDK thinking on Vertex AI to avoid 60s constrained-decoding `504` timeouts.
-
-## Frontend design handoff
-- Added `docs/GitResolve_Premium_UI_Implementation_Guide.md` for Antigravity, based on the existing brief, five visual references and current frontend source.
-- Baseline brief preserved. Untracked guide preserved. Lenis mounts via shared provider; Motion and Lenis are already dependencies.
+- `ProviderHealth` circuit breaker state is strictly process-local and forbidden in checkpoints (`_FORBIDDEN_STATE_KEYS`).
+- Never use `.lstrip("./")` on relative paths that may be dotfile config profiles (`.flake8`, `.gitignore`, `.ruff.toml`); use `re.sub(r"^(?:\./)+", "", ...)`.
+- Untracked `docs/GitResolve_Premium_UI_Implementation_Guide.md` is preserved from user's UI design work.

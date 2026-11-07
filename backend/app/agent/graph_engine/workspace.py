@@ -7,6 +7,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from app.core.redaction import redact
+from app.services.policy import ALLOWED_CONFIG_PROFILES, is_allowed_requirements_file
 
 MAX_OVERLAY_FILE_BYTES = 100_000
 _PROTECTED_FILES = frozenset({
@@ -44,8 +45,10 @@ def load_repository_originals(root: Path) -> dict[str, str]:
             rel = path.relative_to(root).as_posix()
         except OSError:
             continue
-        if any(part.startswith(".") for part in PurePosixPath(rel).parts):
-            continue
+        parts = PurePosixPath(rel).parts
+        if any(part.startswith(".") for part in parts):
+            if not (len(parts) == 1 and parts[0] in ALLOWED_CONFIG_PROFILES):
+                continue
         try:
             originals[rel] = path.read_text(encoding="utf-8")
         except (UnicodeError, OSError):
@@ -58,6 +61,7 @@ def validate_safe_repo_path(
     *,
     root: Path | None = None,
     for_write: bool = False,
+    allow_requirements: bool = False,
 ) -> tuple[bool, str, str]:
     """Validate that a tool path stays inside the repository and avoids protected/secret files."""
     if not raw_path or not isinstance(raw_path, str):
@@ -85,9 +89,13 @@ def validate_safe_repo_path(
         return False, "", f"Access to credential/secret file is forbidden: {norm}"
 
     if for_write:
+        req_blocked = pure.name.startswith("requirements") and not (
+            allow_requirements and is_allowed_requirements_file(norm)
+        )
+        if req_blocked:
+            return False, "", f"Unapproved dependency file modification is forbidden by policy: {norm}"
         if (
             pure.name in _PROTECTED_FILES
-            or pure.name.startswith("requirements")
             or pure.suffix in _PROTECTED_SUFFIXES
             or any(lower_norm.startswith(p) for p in _PROTECTED_PREFIXES)
             or "/migrations/" in lower_norm
@@ -147,10 +155,12 @@ class WorkspaceOverlay:
         originals: dict[str, str],
         *,
         root: Path | None = None,
+        allow_requirements: bool = False,
     ) -> None:
         self.base_sha = base_sha
         self.originals = dict(originals)
         self.root = Path(root).resolve() if root is not None else None
+        self.allow_requirements = allow_requirements
         self._modified_sources: dict[str, str] = {}
         self._edit_records: list[dict[str, Any]] = []
         self._test_files: dict[str, str] = {}
@@ -165,8 +175,14 @@ class WorkspaceOverlay:
         overlay_tests: list[dict[str, str]] | None = None,
         expected_diff_hash: str = "",
         root: Path | None = None,
+        allow_requirements: bool = False,
     ) -> "WorkspaceOverlay":
-        overlay = cls(base_sha=base_sha, originals=originals, root=root)
+        overlay = cls(
+            base_sha=base_sha,
+            originals=originals,
+            root=root,
+            allow_requirements=allow_requirements,
+        )
         for item in overlay_edits or []:
             path = str(item.get("path", ""))
             old_text = str(item.get("old_text", ""))
@@ -224,7 +240,12 @@ class WorkspaceOverlay:
         end_line: int | None = None,
     ) -> tuple[bool, str]:
         """Apply an exact, unique whitespace-tolerant, or validated line-range edit."""
-        ok, norm, err = validate_safe_repo_path(path, root=self.root, for_write=True)
+        ok, norm, err = validate_safe_repo_path(
+            path,
+            root=self.root,
+            for_write=True,
+            allow_requirements=self.allow_requirements,
+        )
         if not ok:
             return False, err
 
@@ -328,7 +349,12 @@ class WorkspaceOverlay:
         is_test: bool | None = None,
     ) -> tuple[bool, str]:
         """Create a new source or regression test file in the overlay."""
-        ok, norm, err = validate_safe_repo_path(path, root=self.root, for_write=True)
+        ok, norm, err = validate_safe_repo_path(
+            path,
+            root=self.root,
+            for_write=True,
+            allow_requirements=self.allow_requirements,
+        )
         if not ok:
             return False, err
         if len(content.encode("utf-8")) > MAX_OVERLAY_FILE_BYTES:

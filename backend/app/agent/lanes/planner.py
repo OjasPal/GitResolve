@@ -18,6 +18,7 @@ from app.agent.lanes.types import (
     LaneName,
     PatchFacts,
     RiskFloor,
+    TaskType,
     TriageReport,
     VerificationLevel,
     VerificationPlan,
@@ -174,6 +175,7 @@ def plan_verification(
     patched_or_diff: dict[str, str] | str,
     triage: TriageReport,
     declared_deps: set[str] | None = None,
+    approved_plan: dict[str, Any] | None = None,
 ) -> VerificationPlan:
     """Classify the actual diff and select the final lane and verification level."""
     patched_map = (
@@ -187,7 +189,23 @@ def plan_verification(
     touched: list[str] = []
     added_lines = 0
     removed_lines = 0
+    non_test_added_lines = 0
+    new_non_test_files = 0
     override_reasons: list[str] = list(triage.override_reasons)
+
+    if triage.task_type_candidate != TaskType.BUG or triage.task_type_floor != TaskType.BUG:
+        override_reasons.append(f"non_bug_task_type:{triage.task_type_floor.value}")
+
+    has_approved_deps = False
+    allowed_exports: set[str] = set()
+    if isinstance(approved_plan, dict):
+        dep_list = approved_plan.get("dependency_changes") or approved_plan.get("dependencyChanges") or []
+        has_approved_deps = bool(dep_list)
+        raw_exports = approved_plan.get("allowed_export_changes") or approved_plan.get("allowedExportChanges") or []
+        if isinstance(raw_exports, list):
+            allowed_exports.update(str(x) for x in raw_exports if x)
+
+    approved_dep_files: list[str] = []
 
     for key in all_keys:
         before = originals.get(key, "")
@@ -197,6 +215,15 @@ def plan_verification(
             add_c, rem_c = _count_diff_lines(before, after)
             added_lines += add_c
             removed_lines += rem_c
+            p_name = PurePosixPath(key.replace("\\", "/")).name.casefold()
+            is_test = p_name.startswith("test_") or p_name.endswith("_test.py") or "/tests/" in f"/{key.replace('\\', '/')}/"
+            if not is_test:
+                non_test_added_lines += add_c
+                if key not in originals and key.endswith(".py"):
+                    new_non_test_files += 1
+            if p_name.startswith("requirements") and p_name.endswith(".txt") and has_approved_deps:
+                approved_dep_files.append(key)
+                override_reasons.append("new_third_party_dependency")
             if key not in originals or key not in patched_map:
                 override_reasons.append("file_creation_or_deletion")
             override_reasons.extend(is_override_path(key))
@@ -220,6 +247,7 @@ def plan_verification(
     referenced_removals: list[str] = []
     side_effect_removals: list[str] = []
     changed_exports: list[str] = []
+    new_public_symbols: list[str] = []
     all_non_import_unchanged = bool(touched)
     only_docstring_or_comment = bool(touched)
 
@@ -227,6 +255,14 @@ def plan_verification(
         if not path.endswith(".py") or path not in originals or path not in patched_map:
             all_non_import_unchanged = False
             only_docstring_or_comment = False
+            if path.endswith(".py") and path not in originals and path in patched_map:
+                p_name = PurePosixPath(path.replace("\\", "/")).name.casefold()
+                is_test = p_name.startswith("test_") or p_name.endswith("_test.py") or "/tests/" in f"/{path.replace('\\', '/')}/"
+                if not is_test:
+                    patch_analysis = analyze_python_source(patched_map[path], path)
+                    for sym in patch_analysis.defined_names:
+                        if not sym.startswith("_"):
+                            new_public_symbols.append(f"{path}:{sym}")
             override_reasons.append("non_python_or_missing_original")
             continue
 
@@ -251,10 +287,22 @@ def plan_verification(
         if patch_analysis.undefined_names:
             override_reasons.append("unresolved_undefined_names_remain")
 
+        p_name = PurePosixPath(path.replace("\\", "/")).name.casefold()
+        is_test = p_name.startswith("test_") or p_name.endswith("_test.py") or "/tests/" in f"/{path.replace('\\', '/')}/"
+        if not is_test:
+            orig_defs = set(orig_analysis.defined_names)
+            for sym in patch_analysis.defined_names:
+                if sym not in orig_defs and not sym.startswith("_"):
+                    new_public_symbols.append(f"{path}:{sym}")
+
         if orig_analysis.exported_names != patch_analysis.exported_names:
             diff_exports = set(orig_analysis.exported_names) ^ set(patch_analysis.exported_names)
             changed_exports.extend(sorted(diff_exports))
             override_reasons.append("public_api_or_init_export")
+            if triage.task_type_floor == TaskType.REFACTOR and not is_test:
+                unapproved = [sym for sym in sorted(diff_exports) if sym not in allowed_exports]
+                if unapproved:
+                    override_reasons.append("unapproved_public_api_change")
 
         orig_imports = orig_analysis.imported_bindings
         patch_imports = patch_analysis.imported_bindings
@@ -296,6 +344,13 @@ def plan_verification(
             except SyntaxError:
                 only_docstring_or_comment = False
 
+    if triage.task_type_floor == TaskType.BUG and (
+        new_non_test_files >= 1
+        or len(new_public_symbols) >= 2
+        or non_test_added_lines > 45
+    ):
+        override_reasons.append("feature_sized_diff_in_bug_mode")
+
     dedup_overrides = tuple(dict.fromkeys(override_reasons))
 
     # Determine ChangeClass
@@ -317,6 +372,8 @@ def plan_verification(
             "referenced_removal",
             "possible_side_effect_removal",
             "new_third_party_dependency",
+            "feature_sized_diff_in_bug_mode",
+            "unapproved_public_api_change",
         )
     ):
         change_class = ChangeClass.RISKY_OVERRIDE
@@ -348,6 +405,8 @@ def plan_verification(
         changed_exports=tuple(changed_exports),
         override_reasons=dedup_overrides,
         non_import_ast_unchanged=all_non_import_unchanged,
+        new_public_symbols=tuple(new_public_symbols),
+        approved_dependency_files=tuple(approved_dep_files),
     )
 
     allowlisted_class = change_class in {
@@ -366,7 +425,9 @@ def plan_verification(
         escalation_reasons.append("no_failing_original_oracle_witness")
 
     is_fast_eligible = (
-        not dedup_overrides
+        triage.task_type_candidate == TaskType.BUG
+        and triage.task_type_floor == TaskType.BUG
+        and not dedup_overrides
         and allowlisted_class
         and has_static_witness
         and all_non_import_unchanged

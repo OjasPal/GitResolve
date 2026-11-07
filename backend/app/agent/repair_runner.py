@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.agent.interface import ExecuteResult
 from app.schemas.enums import ArtifactType, EventLevel, EventType, FailureCode, TaskStage
-from app.services.policy import validate_fix
+from app.services.policy import is_allowed_config_profile, validate_fix
 from app.core.redaction import redact
 from app.worker.publication_text import PublicationText
 
@@ -53,6 +53,10 @@ class EditProposal(BaseModel):
         }:
             self.blocked_reason = ""
         if self.tests and self.edits:
+            self.needed_files = []
+            self.blocked_reason = ""
+            return self
+        if self.edits:
             self.needed_files = []
             self.blocked_reason = ""
             return self
@@ -362,11 +366,44 @@ def diff_sections(diff: str) -> dict[str, str]:
     return result
 
 
-def validate_proposal(proposal, limits, base_sha):
+def validate_proposal(
+    proposal,
+    limits,
+    base_sha,
+    *,
+    task_type: str = "bug",
+    allowed_dependency_changes=None,
+):
     # Validate paths and scope before a patch reaches the sandbox, independently of the model.
-    evidence_shape = {"reproduced": True, "regressionPassed": True, "testsRun": 1, "newFailures": []}
-    validate_fix(proposal.reproduction_diff, limits, evidence_shape, base_sha)
-    validate_fix(proposal.final_diff, limits, evidence_shape, base_sha)
+    effective_mode = (task_type or "bug").strip().lower()
+    evidence_shape = {
+        "reproduced": True,
+        "regressionPassed": True,
+        "testsRun": 1,
+        "newFailures": [],
+        "taskType": effective_mode,
+        "baselinePassed": True,
+        "touchedSymbolsCovered": True,
+        "configProfileValidated": True,
+    }
+    if proposal.reproduction_diff or effective_mode in {"bug", "feature"}:
+        validate_fix(
+            proposal.reproduction_diff,
+            limits,
+            evidence_shape,
+            base_sha,
+            task_type=effective_mode,
+            allowed_dependency_changes=allowed_dependency_changes,
+        )
+    validate_fix(
+        proposal.final_diff,
+        limits,
+        evidence_shape,
+        base_sha,
+        require_regression=effective_mode in {"bug", "feature"},
+        task_type=effective_mode,
+        allowed_dependency_changes=allowed_dependency_changes,
+    )
     repro = diff_sections(proposal.reproduction_diff)
     final = diff_sections(proposal.final_diff)
     for name, section in repro.items():

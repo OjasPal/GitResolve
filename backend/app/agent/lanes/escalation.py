@@ -33,6 +33,7 @@ def _compact_evidence_summary(
         "triageRef": {
             "candidateLane": triage.candidate_lane.value,
             "riskFloor": triage.risk_floor.value,
+            "taskType": triage.task_type_floor.value,
             "localizedFiles": list(triage.localized_files[:5]),
         }
     }
