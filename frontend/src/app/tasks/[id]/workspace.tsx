@@ -45,27 +45,41 @@ const SAFE_GUIDANCE_URLS = new Set([
   "https://aistudio.google.com/apikey",
   "https://platform.openai.com/api-keys",
   "https://console.anthropic.com/settings/keys",
+  "https://help.shopify.com/en/manual/orders/notifications/webhooks",
   "https://help.shopify.com/en/manual/Fulfillment/setup/notifications/webhooks",
   "https://dashboard.stripe.com/webhooks",
+  "https://github.com/settings/developers",
+  "https://console.aws.amazon.com/iam/",
+  "https://console.twilio.com/",
+  "https://app.sendgrid.com/settings/api_keys",
+  "https://api.slack.com/apps",
+  "https://app.pinecone.io/",
+  "https://supabase.com/dashboard",
 ]);
 
 function renderTextWithSafeLinks(text: string) {
-  const parts = text.split(/(https:\/\/[^\s)]+)/g);
-  return parts.map((part, idx) =>
-    SAFE_GUIDANCE_URLS.has(part) ? (
-      <a
-        key={idx}
-        href={part}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="underline underline-offset-2 font-medium"
-      >
-        {part}
-      </a>
+  // Strip any accidental markdown link brackets [Label](https://...) into "Label: https://..."
+  const normalized = text.replace(/\[([^\]]+)\]\((https:\/\/[^\s)]+)\)/g, "$1: $2");
+  const parts = normalized.split(/(https:\/\/[^\s)]+)/g);
+  return parts.map((part, idx) => {
+    const cleanUrl = part.replace(/[.,;]+$/, "");
+    const trailing = part.slice(cleanUrl.length);
+    return SAFE_GUIDANCE_URLS.has(cleanUrl) ? (
+      <span key={idx}>
+        <a
+          href={cleanUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline underline-offset-2 font-medium"
+        >
+          {cleanUrl}
+        </a>
+        {trailing}
+      </span>
     ) : (
       <span key={idx}>{part}</span>
-    )
-  );
+    );
+  });
 }
 
 function TaskWorkspaceContent() {
@@ -410,16 +424,25 @@ function TaskWorkspaceContent() {
                 Setup you must do outside the codebase
               </p>
             </div>
-            {Array.isArray(task.finalDiffSummary?.whatWeFound) && (task.finalDiffSummary.whatWeFound as string[]).length > 0 && (
-              <div className="font-mono text-[11px] text-neutral-600 dark:text-neutral-400 space-y-0.5">
-                {(task.finalDiffSummary.whatWeFound as string[]).map((item, i) => (
-                  <div key={i} className="flex items-center gap-1.5">
-                    <FileCode className="w-3.5 h-3.5 shrink-0 text-neutral-400" />
-                    <span className="text-neutral-900 dark:text-neutral-100">{item}</span>
-                  </div>
-                ))}
-              </div>
-            )}
+            {(() => {
+              const foundItems = (
+                Array.isArray(task.finalDiffSummary?.setupWhatWeFound)
+                  ? task.finalDiffSummary.setupWhatWeFound
+                  : Array.isArray(task.finalDiffSummary?.whatWeFound) && task.status !== "resolved_with_guidance"
+                  ? task.finalDiffSummary.whatWeFound
+                  : []
+              ) as string[];
+              return foundItems.length > 0 ? (
+                <div className="font-mono text-[11px] text-neutral-600 dark:text-neutral-400 space-y-0.5">
+                  {foundItems.map((item, i) => (
+                    <div key={i} className="flex items-center gap-1.5">
+                      <FileCode className="w-3.5 h-3.5 shrink-0 text-neutral-400" />
+                      <span className="text-neutral-900 dark:text-neutral-100">{item}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null;
+            })()}
             <p className="text-neutral-700 dark:text-neutral-300 whitespace-pre-wrap leading-relaxed">
               {renderTextWithSafeLinks(String(task.finalDiffSummary?.setupNote || task.verification?.setupNote))}
             </p>

@@ -1185,20 +1185,20 @@ def build_curated_setup_note(
     safe_link = str(raw_link) if is_allowlisted_url(raw_link) else None
 
     primary_env = env_vars[0] if env_vars else str(pinfo.get("default_env") or "API_KEY")
-    env_list_str = ", ".join(f"`{e}`" for e in env_vars) if env_vars else f"`{primary_env}`"
-    loc_refs = ", ".join(f"`{it.ref_str()}`" for it in selected_items[:3]) or "your configuration"
-    console_ref = f"[{console_name}]({safe_link})" if safe_link else console_name
+    env_list_str = ", ".join(env_vars) if env_vars else primary_env
+    loc_refs = ", ".join(it.ref_str() for it in selected_items[:3]) or "your configuration"
+    console_ref = f"{console_name}: {safe_link}" if safe_link else console_name
 
     if reason_code == "external_webhook_setup":
         lines = [
             f"1. Open {console_ref} and copy the active webhook signing secret.",
-            f"2. Configure {env_list_str} in your `.env` file or deployment secret manager (read at {loc_refs}).",
+            f"2. Configure {env_list_str} in your .env file or deployment secret manager (read at {loc_refs}).",
             "3. Restart the service after deploying this code change. Never paste secrets into issues or pull requests.",
         ]
     else:
         lines = [
-            f"1. Create or verify an active {display_name} credential in {console_ref}.",
-            f"2. Set {env_list_str} in your `.env` file or deployment secret manager (referenced at {loc_refs}).",
+            f"1. Create or verify an active {display_name} credential in {console_ref}",
+            f"2. Set {env_list_str} in your .env file or deployment secret manager (referenced at {loc_refs}).",
             "3. Restart the application after deploying this fix. Automated sandbox verification ran with safe placeholder values.",
         ]
 

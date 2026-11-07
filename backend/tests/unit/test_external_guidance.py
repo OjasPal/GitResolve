@@ -960,3 +960,29 @@ def test_basesettings_numeric_fields_not_polluted_by_placeholder_env() -> None:
         assert numeric_field not in placeholders
         assert numeric_field not in ev.env_var_names
 
+
+def test_setup_note_uses_plain_url_without_markdown_brackets_and_auto_includes_email_validator(
+    tmp_path: Path,
+) -> None:
+    note, _ = build_curated_setup_note(
+        reason_code="external_secret_missing",
+        provider_key="groq",
+        env_vars=("GROQ_API_KEY",),
+        selected_items=(),
+    )
+    assert "https://console.groq.com/keys" in note
+    assert "[Groq Cloud Console](" not in note
+    assert "`" not in note
+
+    repo = _write_repo(
+        tmp_path / "repo_pydantic_email",
+        {
+            "backend/requirements.txt": "fastapi==0.115.0\npydantic==2.9.2\n",
+            "backend/schemas/auth.py": "from pydantic import BaseModel, EmailStr\nclass UserBase(BaseModel):\n    email: EmailStr\n",
+        },
+    )
+    prof = profile_repository(repo)
+    specs, _ = declared_requirements(repo, prof)
+    assert any("email-validator" in s for s in specs)
+
+

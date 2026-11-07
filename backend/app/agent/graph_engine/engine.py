@@ -1031,15 +1031,25 @@ def run_repair_graph(
         lane: str,
         resolution_kind: str = "external_action",
         final_tests_text: str = "",
+        setup_note: str = "",
+        setup_note_hash: str = "",
+        setup_what_we_found: Iterable[str] = (),
     ) -> ExecuteResult:
         clean_g = dict(guidance_outcome)
         clean_g["lane"] = lane
         what_found = list(clean_g.get("whatWeFound") or [])
+        extra_summary: dict[str, Any] = {}
+        if setup_note:
+            extra_summary["setupNote"] = setup_note
+            extra_summary["setupNoteHash"] = setup_note_hash
+            if setup_what_we_found:
+                extra_summary["setupWhatWeFound"] = list(setup_what_we_found)
         return ExecuteResult(
             "resolved_with_guidance",
             final_tests=final_tests_text,
             summary={
                 **clean_g,
+                **extra_summary,
                 "guidanceOutcome": clean_g,
                 "resolutionKind": resolution_kind,
                 "lane": lane,
@@ -1052,6 +1062,7 @@ def run_repair_graph(
                 "newFailures": [],
                 "lane": lane,
                 "resolutionKind": resolution_kind,
+                **({"setupNote": setup_note, "setupNoteHash": setup_note_hash} if setup_note else {}),
             },
             failure_message=str(clean_g.get("title") or "External setup required"),
             evidence=what_found,
@@ -1079,6 +1090,9 @@ def run_repair_graph(
                     lane=lane_str,
                     resolution_kind=res_assess.kind,
                     final_tests_text=output(exec_res),
+                    setup_note=res_assess.setup_note,
+                    setup_note_hash=res_assess.setup_note_hash,
+                    setup_what_we_found=res_assess.what_we_found,
                 )
             if (
                 cat == "missing_dep"
@@ -1096,6 +1110,9 @@ def run_repair_graph(
                     lane=lane_str,
                     resolution_kind="external_action",
                     final_tests_text=output(exec_res),
+                    setup_note=res_assess.setup_note,
+                    setup_note_hash=res_assess.setup_note_hash,
+                    setup_what_we_found=res_assess.what_we_found,
                 )
         return environment_outcome(cat, exec_res)
 

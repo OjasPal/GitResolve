@@ -81,10 +81,32 @@ def declared_requirements(root, profile):
                     read_file(sub_req)
     if not specs and any(Path(n).name in {"setup.py", "setup.cfg", "Pipfile", "Pipfile.lock", "poetry.lock"} for n in profile.dependency_files):
         raise DependencyError("This dependency format requires a static requirements export; repository build scripts will not run.")
+    canon_names = {canonicalize_name(requirement(s).name) for s in specs}
+    if "pydantic" in canon_names and "email-validator" not in canon_names:
+        uses_email = getattr(profile, "uses_pydantic_email", False)
+        if not uses_email:
+            for py_file in root.rglob("*.py"):
+                try:
+                    rel_parts = py_file.relative_to(root).parts
+                except ValueError:
+                    continue
+                if any(p in {".git", ".venv", "venv", "node_modules", "__pycache__"} for p in rel_parts) or py_file.is_symlink():
+                    continue
+                try:
+                    txt = py_file.read_text(encoding="utf-8", errors="ignore")
+                except OSError:
+                    continue
+                if "EmailStr" in txt or "NameEmail" in txt or "email_validator" in txt:
+                    uses_email = True
+                    break
+        if uses_email:
+            specs.append(str(requirement("email-validator>=2.0.0")))
     digest = hashlib.sha256()
     for name in sorted(set(profile.dependency_files) | {p.relative_to(root).as_posix() for p in visited}):
         path = root / name
         digest.update(name.encode() + b"\0" + path.read_bytes() + b"\0")
+    if "email-validator" in {canonicalize_name(requirement(s).name) for s in specs} and "email-validator" not in canon_names:
+        digest.update(b"__auto_extra__:email-validator>=2.0.0\0")
     return sorted(set(specs)), digest.hexdigest()
 
 

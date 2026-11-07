@@ -469,10 +469,22 @@ class WorkerService:
                 "dispatchPhase": None,
                 **release_lease(),
             }
+            prev_summary = dict(ctx.task.get("finalDiffSummary") or {})
+            prev_ver = dict(ctx.task.get("verification") or {})
             if summary is not None:
-                updates["finalDiffSummary"] = redact_value(dict(summary))
+                merged_summary = dict(summary)
+                for k in ("setupNote", "setupNoteHash", "setupWhatWeFound"):
+                    if prev_summary.get(k) and not merged_summary.get(k):
+                        merged_summary[k] = prev_summary[k]
+                if prev_summary.get("whatWeFound") and not merged_summary.get("setupWhatWeFound"):
+                    merged_summary["setupWhatWeFound"] = prev_summary["whatWeFound"]
+                updates["finalDiffSummary"] = redact_value(merged_summary)
             if verification is not None:
-                updates["verification"] = redact_value(dict(verification))
+                merged_ver = dict(verification)
+                for k in ("setupNote", "setupNoteHash"):
+                    if prev_ver.get(k) and not merged_ver.get(k):
+                        merged_ver[k] = prev_ver[k]
+                updates["verification"] = redact_value(merged_ver)
             return apply_change(
                 txn,
                 ctx,
