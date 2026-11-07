@@ -27,7 +27,6 @@ export function LegalPage({title,intro,sections,guide=false}:{
           {section.content}
         </section>
       )}
-      {!guide&&<p className="neutral-note">Read the detailed project drafts: <a href="https://github.com/OjasPal/GitResolve/tree/main/docs" target="_blank" rel="noreferrer">policy documentation ↗</a></p>}
       </div>
     </div>
   </article>;
