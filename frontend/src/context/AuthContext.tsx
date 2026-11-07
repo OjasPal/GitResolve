@@ -30,6 +30,7 @@ interface AuthContextType {
   signInWithGitHub: () => Promise<void>;
   signInWithEmail: (email: string, pass: string) => Promise<void>;
   signUpWithEmail: (email: string, pass: string, name?: string) => Promise<void>;
+  updateDisplayName: (name: string) => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
   signOutUser: () => Promise<void>;
   getIdToken: () => Promise<string | null>;
@@ -44,6 +45,7 @@ const AuthContext = createContext<AuthContextType>({
   signInWithGitHub: async () => {},
   signInWithEmail: async () => {},
   signUpWithEmail: async () => {},
+  updateDisplayName: async () => {},
   resetPassword: async () => {},
   signOutUser: async () => {},
   getIdToken: async () => null,
@@ -141,6 +143,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const updateDisplayName = async (name: string) => {
+    const displayName = name.trim();
+    if (!displayName || displayName.length > 80) {
+      throw new Error("Enter a display name between 1 and 80 characters.");
+    }
+    const account = auth?.currentUser;
+    if (!account) throw new Error("Sign in again to update your display name.");
+    await updateProfile(account, { displayName });
+    setUser(current => current?.uid === account.uid ? { ...current, displayName } : current);
+  };
+
   const resetPassword = async (email: string) => {
     setError(null);
     if (!isFirebaseConfigured || !auth) {
@@ -188,6 +201,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signInWithGitHub,
         signInWithEmail,
         signUpWithEmail,
+        updateDisplayName,
         resetPassword,
         signOutUser,
         getIdToken,

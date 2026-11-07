@@ -80,3 +80,18 @@ nextjs-portal { display: none !important; }
 .public-footer nav{flex-wrap:wrap;min-width:0}.public-footer nav a{white-space:nowrap}
 .gate-conversation{min-width:0}.chat-message p{overflow-wrap:anywhere}
 .gate-composer:focus-within{border-color:var(--text-2)}
+
+/* Help shares the policy reading layout, with structured guidance for longer journeys. */
+.help-page .legal-layout > div{min-width:0}
+.help-page .legal-layout nav{max-height:calc(100dvh - 144px);overflow-y:auto;padding-bottom:8px}
+.help-page .legal-layout p,.help-page li,.help-page dd{line-height:1.9;color:var(--text-2);overflow-wrap:anywhere}
+.help-page .legal-layout p+p{margin-top:20px}
+.help-page ol,.help-page ul{margin:24px 0;padding-left:24px}
+.help-page ol{list-style:decimal}
+.help-page ul{list-style:disc}
+.help-page li{padding-left:8px;margin:12px 0}
+.help-page li::marker{color:var(--text);font-family:var(--font-geist-mono);font-size:13px}
+.help-page dt{color:var(--text);font-weight:500;margin-top:28px}
+.help-page dd{margin:8px 0 0}
+.help-page .legal-layout section a{color:var(--text);text-decoration:underline;text-underline-offset:4px;text-decoration-color:var(--stroke-hi)}
+@media(max-width:767px){.help-page .legal-layout nav{max-height:none;overflow:visible}}
