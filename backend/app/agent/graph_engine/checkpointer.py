@@ -216,7 +216,7 @@ class SqliteRepairCheckpointer(InMemorySaver):
             self._persist_thread(thread_id)
             return dict(pin)
 
-    def _compact_thread_buffers(self, thread_id: str) -> tuple[dict[str, dict[str, Any]], dict[Any, Any], dict[Any, Any]]:
+    def _compact_thread_buffers(self, thread_id: str, *, max_keep: int = 2) -> tuple[dict[str, dict[str, Any]], dict[Any, Any], dict[Any, Any]]:
         """Prune historical checkpoints to the most recent 2 per namespace so storage stays compact O(1)."""
         ns_map: dict[str, dict[str, Any]] = {}
         kept_cp_ids: set[str] = set()
@@ -225,7 +225,7 @@ class SqliteRepairCheckpointer(InMemorySaver):
         for ns, cp_map in self.storage.get(thread_id, {}).items():
             if not cp_map:
                 continue
-            sorted_ids = sorted(cp_map.keys())[-2:]
+            sorted_ids = sorted(cp_map.keys())[-max_keep:]
             pruned_cp_map = {cid: cp_map[cid] for cid in sorted_ids}
             ns_map[ns] = pruned_cp_map
             kept_cp_ids.update(sorted_ids)
@@ -595,12 +595,19 @@ class StoreRepairCheckpointer(SqliteRepairCheckpointer):
                 "lane_policy_mismatch": False,
                 "lane_policy_mismatch_reason": "",
             })
-            ns_map, thread_writes, thread_blobs = self._compact_thread_buffers(thread_id)
+            ns_map, thread_writes, thread_blobs = self._compact_thread_buffers(thread_id, max_keep=2)
             has_cp = any(bool(cp_map) for cp_map in ns_map.values())
             storage_b64 = self._encode_blob(ns_map)
             writes_b64 = self._encode_blob(thread_writes)
             blobs_b64 = self._encode_blob(thread_blobs)
             byte_size = len(storage_b64) + len(writes_b64) + len(blobs_b64)
+            if byte_size > MAX_CHECKPOINT_BYTES:
+                ns_map, thread_writes, thread_blobs = self._compact_thread_buffers(thread_id, max_keep=1)
+                thread_writes = {}
+                storage_b64 = self._encode_blob(ns_map)
+                writes_b64 = self._encode_blob(thread_writes)
+                blobs_b64 = self._encode_blob(thread_blobs)
+                byte_size = len(storage_b64) + len(writes_b64) + len(blobs_b64)
             if byte_size > MAX_CHECKPOINT_BYTES:
                 raise ValueError(
                     f"Store checkpoint for {thread_id} ({byte_size} bytes) exceeds MAX_CHECKPOINT_BYTES ({MAX_CHECKPOINT_BYTES})."

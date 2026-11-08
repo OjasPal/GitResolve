@@ -1307,6 +1307,20 @@ def apply_resolution_guards(
         kind = "code_fix"
         guard_reasons.append("mixed_without_referenced_env_downgraded_to_code_fix")
 
+    # Guard 4: When the LLM returns 'code_fix' (or when a code change is requested) AND the issue
+    # explicitly names a verified repository credential/secret env var as missing/omitted/expired,
+    # promote 'code_fix' -> 'mixed' so the user always receives the external setup steps alongside the fix.
+    combined_issue_upper = f"{issue_title or ''}\n{issue_body or ''}".upper()
+    explicitly_named_verified_envs = [
+        env_name
+        for env_name in verified_envs
+        if len(env_name) >= 4 and env_name in combined_issue_upper and _is_credential_env_name(env_name)
+    ]
+    if kind == "code_fix" and explicitly_named_verified_envs and issue_mentions_external_cause(issue_title, issue_body, evidence):
+        downgraded_from = downgraded_from or "code_fix"
+        kind = "mixed"
+        guard_reasons.append("code_fix_with_explicit_credential_env_promoted_to_mixed")
+
     if kind == "external_action":
         guidance_outcome = build_curated_guidance_outcome(
             reason_code=reason_code,

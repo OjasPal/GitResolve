@@ -977,12 +977,130 @@ def test_setup_note_uses_plain_url_without_markdown_brackets_and_auto_includes_e
     repo = _write_repo(
         tmp_path / "repo_pydantic_email",
         {
-            "backend/requirements.txt": "fastapi==0.115.0\npydantic==2.9.2\n",
+            "backend/requirements.txt": "fastapi==0.115.0\npydantic==2.9.2\npasslib[bcrypt]==1.7.4\n",
             "backend/schemas/auth.py": "from pydantic import BaseModel, EmailStr\nclass UserBase(BaseModel):\n    email: EmailStr\n",
         },
     )
     prof = profile_repository(repo)
     specs, _ = declared_requirements(repo, prof)
     assert any("email-validator" in s for s in specs)
+    assert any("bcrypt==4.0.1" in s for s in specs)
+
+
+def test_code_fix_with_explicit_credential_promoted_to_mixed_and_preexisting_baseline_failure_tolerated(
+    tmp_path: Path,
+) -> None:
+    repo = _write_repo(
+        tmp_path / "repo_nexusmind_preexisting",
+        {
+            "requirements.txt": "pytest==8.3.3\n",
+            "src/ai_service.py": (
+                "import os\n"
+                "import groq\n\n"
+                "class AIService:\n"
+                "    def generate_rag_response(self, query: str) -> tuple[int, dict]:\n"
+                "        key = os.getenv('GROQ_API_KEY')\n"
+                "        try:\n"
+                "            if not key:\n"
+                "                raise ValueError('empty')\n"
+                "            return 200, {'answer': query}\n"
+                "        except Exception:\n"
+                "            return 500, {'error': 'INTERNAL_EMBEDDING_FAILURE'}\n"
+            ),
+            "tests/test_auth.py": "def test_password_hashing():\n    assert False\n",
+        },
+    )
+    issue_title = "[Bug]: Missing or invalid GROQ_API_KEY masks credential requirement behind internal embedding failure"
+    issue_body = (
+        "When `GROQ_API_KEY` is omitted from the environment or has expired, invoking the RAG query endpoint "
+        "should return a clear, structured 401/422 status indicating that provider credentials are required. "
+        "Instead, `AIService.generate_rag_response` catches generic `Exception` and attempts to invoke an "
+        "unverified fallback model (`gpt-oss-20b-default-v0`), which subsequently fails and returns a masked "
+        "`INTERNAL_EMBEDDING_FAILURE` string."
+    )
+    originals = load_repository_originals(repo)
+    evidence = collect_external_evidence(originals, base_sha="a" * 40)
+    triage_nm = triage_repository(profile=None, originals=originals, issue_text=issue_body)
+
+    # Even if LLM says candidate_kind="code_fix", Guard 4 promotes to "mixed"
+    guarded = apply_resolution_guards(
+        candidate_kind="code_fix",
+        candidate_reason_code="none",
+        candidate_provider_key="groq",
+        requested_env_vars=["GROQ_API_KEY"],
+        requested_refs=["src/ai_service.py:6"],
+        code_change_requested_by_llm=True,
+        clarification_question="",
+        issue_title=issue_title,
+        issue_body=issue_body,
+        triage=triage_nm,
+        evidence=evidence,
+        originals=originals,
+    )
+    assert guarded.kind == "mixed"
+    assert "code_fix_with_explicit_credential_env_promoted_to_mixed" in guarded.guard_reasons
+    assert "https://console.groq.com/keys" in guarded.setup_note
+    assert "[" not in guarded.setup_note and "]" not in guarded.setup_note
+
+    # And when baseline has a pre-existing failure in tests/test_auth.py, verify_node still passes
+    # when the new regression test passes and only tests/test_auth.py fails!
+    from app.agent.lanes.external_guidance import ResolutionAssessmentPayload
+
+    llm_assess_code_fix = ResolutionAssessmentPayload(
+        kind="code_fix",
+        reason_code="none",
+        provider_key="groq",
+        referenced_env_vars=["GROQ_API_KEY"],
+        referenced_evidence_refs=["src/ai_service.py:6"],
+        code_change_requested=True,
+    )
+    proposal = EditProposal(
+        explanation="Validate GROQ_API_KEY and return 401.",
+        edits=[
+            {
+                "path": "src/ai_service.py",
+                "old_text": "            if not key:\n                raise ValueError('empty')",
+                "new_text": (
+                    "            if not key or key.startswith('gitresolve-placeholder-'):\n"
+                    "                return 401, {'error': 'GROQ_API_KEY required'}"
+                ),
+            }
+        ],
+        tests=[
+            {
+                "path": "tests/test_rag_credentials.py",
+                "content": (
+                    "from src.ai_service import AIService\n\n"
+                    "def test_missing_groq_key():\n"
+                    "    status, _ = AIService().generate_rag_response('hi')\n"
+                    "    assert status == 401\n"
+                ),
+            }
+        ],
+    )
+    review = QualityReview(
+        approved=True,
+        summary="Validates GROQ_API_KEY and returns 401.",
+        commit_message="fix: validate GROQ_API_KEY before RAG query",
+        branch_name="fix-groq-key-validation",
+        requirements=[{"requirement": "Return 401 when GROQ_API_KEY is missing", "status": "passed", "evidence": "test_missing_groq_key"}],
+        blocking_issues=[],
+    )
+    router = FakeRouter([llm_assess_code_fix, proposal, review])
+    ctx = FakeCtx(
+        repo,
+        executions=[
+            _exec("failed", 1, "FAILED tests/test_auth.py::test_password_hashing - AssertionError\n1 failed in 0.03s\n"),
+            _exec("failed", 1, "FAILED tests/test_rag_credentials.py::test_missing_groq_key - AssertionError\n1 failed in 0.02s\n"),
+            _exec("failed", 1, "FAILED tests/test_auth.py::test_password_hashing - AssertionError\n1 failed, 1 passed in 0.04s\n"),
+        ],
+    )
+    task = FakeTask(issue_title, issue_body)
+    res = run_repair(task, ctx, router=router)
+    assert res.outcome == "fix_ready"
+    assert res.summary is not None
+    assert res.summary.get("resolutionKind") == "mixed"
+    assert "https://console.groq.com/keys" in str(res.summary.get("setupNote") or "")
+
 
 

@@ -19,6 +19,7 @@ from agent.attempt_memory import (
     INFRA_FAILURE_CATEGORIES,
     AttemptMemory,
     FailureCategory,
+    _extract_failed_test_files,
     classify_failure,
     strategy_for,
 )
@@ -1067,6 +1068,34 @@ def run_repair_graph(
             failure_message=str(clean_g.get("title") or "External setup required"),
             evidence=what_found,
             next_step=str(clean_g.get("afterYouDoThis") or "Complete the external setup steps above."),
+        )
+
+    def _mixed_guidance_fallback(state: RepairState, *, final_tests_text: str = "") -> ExecuteResult | None:
+        if not external_guidance_enabled():
+            return None
+        res_assess = _current_resolution_assessment(state)
+        if res_assess.kind not in {"external_action", "mixed"}:
+            return None
+        lane_str = str(state.get("lane") or "full")
+        g_outcome = res_assess.guidance_outcome or build_curated_guidance_outcome(
+            reason_code=(
+                res_assess.reason_code
+                if res_assess.reason_code != "none"
+                else "external_secret_missing"
+            ),
+            provider_key=res_assess.provider_key,
+            env_vars=res_assess.env_vars or external_evidence.env_var_names[:3],
+            selected_items=external_evidence.items[:4],
+            lane=lane_str,
+        )
+        return _guidance_execute_result(
+            g_outcome,
+            lane=lane_str,
+            resolution_kind=res_assess.kind,
+            final_tests_text=final_tests_text,
+            setup_note=res_assess.setup_note,
+            setup_note_hash=res_assess.setup_note_hash,
+            setup_what_we_found=res_assess.what_we_found,
         )
 
     def _translate_environment_outcome(cat: str, exec_res: Any, state: RepairState) -> ExecuteResult:
@@ -2546,17 +2575,33 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
                 _record_router_tokens(budgets, response)
             except (ProviderError, AllProvidersFailedError) as exc:
                 if getattr(exc, "reason", None) == "quality":
+                    mixed_fb = _mixed_guidance_fallback(state)
                     return {
                         "budgets": budgets,
                         "messages": messages_out,
                         "specialist_calls_used": spec_used,
                         "terminal_outcome": _serialize_execute_result(
-                            ExecuteResult(
+                            mixed_fb
+                            if mixed_fb is not None
+                            else ExecuteResult(
                                 "failed",
                                 failure_code=FailureCode.NO_FIX_FOUND,
                                 failure_message="The revised approach still could not be verified. Failure history is saved; refine the request before another run.",
                             )
                         ),
+                    }
+                mixed_fb = _mixed_guidance_fallback(state)
+                if mixed_fb is not None:
+                    _safe_event(
+                        ctx,
+                        EventType.INFO,
+                        str((mixed_fb.summary or {}).get("title") or "External setup steps ready."),
+                    )
+                    return {
+                        "budgets": budgets,
+                        "messages": messages_out,
+                        "specialist_calls_used": spec_used,
+                        "terminal_outcome": _serialize_execute_result(mixed_fb),
                     }
                 _safe_event(ctx, EventType.ERROR, "Investigation temporarily paused. Model service recovery is needed.")
                 return {
@@ -3145,6 +3190,13 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
                 ),
             }
         if attempt >= max_attempts:
+            mixed_fb = _mixed_guidance_fallback(state, final_tests_text=feedback[-4000:])
+            if mixed_fb is not None:
+                _safe_event(
+                    ctx,
+                    EventType.INFO,
+                    str((mixed_fb.summary or {}).get("title") or "External setup steps ready."),
+                )
             return {
                 "budgets": budgets,
                 "specialist_calls_used": spec_cnt,
@@ -3153,7 +3205,9 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
                 "last_failure_summary": feedback,
                 "strategy_action": next_strat_action,
                 "terminal_outcome": _serialize_execute_result(
-                    ExecuteResult(
+                    mixed_fb
+                    if mixed_fb is not None
+                    else ExecuteResult(
                         "failed",
                         failure_code=FailureCode.NO_FIX_FOUND,
                         failure_message="No verified fix within the repair attempt budget. Last check: " + redact(feedback[-300:]),
@@ -3579,20 +3633,42 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
             + "\nREPRODUCTION\n" + (output(repro_res) if repro_res else "")
             + "\nFIXED\n" + output(final)
         )
+        target_tests = [
+            t.get("path", "") for t in state.get("overlay_tests", []) if t.get("path")
+        ] or list(diff_sections(proposal.reproduction_diff).keys())
+        baseline_failed_files = (
+            _extract_failed_test_files(output(baseline_res))
+            if baseline_res is not None and not passed(baseline_res)
+            else []
+        )
+        final_failed_files = _extract_failed_test_files(output(final)) if not passed(final) else []
+        norm_targets = {t.replace("\\", "/").lstrip("./") for t in target_tests if t}
+        norm_baseline_failed = {b.replace("\\", "/").lstrip("./") for b in baseline_failed_files if b}
+        norm_final_failed = {f.replace("\\", "/").lstrip("./") for f in final_failed_files if f}
+        verified_despite_preexisting = bool(
+            not passed(final)
+            and tests
+            and norm_targets
+            and norm_final_failed
+            and norm_baseline_failed
+            and norm_final_failed.issubset(norm_baseline_failed)
+            and not (norm_final_failed & norm_targets)
+            and getattr(final, "cleanup_ok", True)
+            and not getattr(final, "oom_killed", False)
+            and not getattr(final, "timed_out", False)
+        )
         ctx.artifact(f"attempt_{attempt:03d}_tests", ArtifactType.ATTEMPT_TESTS, transcript, attempt)
-        if not passed(final) or not tests:
+        if (not passed(final) and not verified_despite_preexisting) or not tests:
             ctx.usage(attempts_used=attempt)
             feedback = "Patched test suite did not pass: " + output(final)
             ctx.artifact("final_tests", ArtifactType.FINAL_TESTS, transcript)
-            target_tests = [
-                t.get("path", "") for t in state.get("overlay_tests", []) if t.get("path")
-            ] or diff_sections(proposal.reproduction_diff)
             item = _remember(
                 attempt,
                 feedback,
                 exec_result=final,
                 stage="verify",
                 target_test_files=target_tests,
+                baseline_failed_files=baseline_failed_files,
                 what_was_tried=proposal.explanation,
             )
             _safe_event(ctx, EventType.TEST_RUN, "Patched tests failed. Revising within the remaining attempt budget.")
@@ -3906,16 +3982,31 @@ Return QualityReview."""
             review = review if isinstance(review, QualityReview) else QualityReview.model_validate_json(reviewed.result.raw_text)
         except (ProviderError, AllProvidersFailedError) as exc:
             if getattr(exc, "reason", None) == "quality":
+                mixed_fb = _mixed_guidance_fallback(state, final_tests_text=transcript)
                 return {
                     "budgets": budgets,
                     "specialist_calls_used": spec_used,
                     "terminal_outcome": _serialize_execute_result(
-                        ExecuteResult(
+                        mixed_fb
+                        if mixed_fb is not None
+                        else ExecuteResult(
                             "failed",
                             failure_code=FailureCode.NO_FIX_FOUND,
                             failure_message="Evaluation remained inconclusive after reasoning review. Your evidence is saved; refine the request before continuing.",
                         )
                     ),
+                }
+            mixed_fb = _mixed_guidance_fallback(state, final_tests_text=transcript)
+            if mixed_fb is not None:
+                _safe_event(
+                    ctx,
+                    EventType.INFO,
+                    str((mixed_fb.summary or {}).get("title") or "External setup steps ready."),
+                )
+                return {
+                    "budgets": budgets,
+                    "specialist_calls_used": spec_used,
+                    "terminal_outcome": _serialize_execute_result(mixed_fb),
                 }
             _safe_event(ctx, EventType.ERROR, "Evaluation incomplete. Test evidence is saved, and publication remains blocked.")
             return {

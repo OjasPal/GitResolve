@@ -434,6 +434,8 @@ class ModelRouter:
                     or not self.health.available(self.settings.specialist.model_id)
                     or (not self.health.available(self.settings.primary.model_id) and allow_specialist is not True)
                 ):
+                    if index + 1 < len(chain) and self.health.available(chain[index + 1].model_id):
+                        continue
                     self._transition(
                         "recovery",
                         "Evaluation incomplete. The reasoning specialist is temporarily unavailable.",
