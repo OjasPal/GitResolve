@@ -264,6 +264,7 @@ export interface RepositoryView {
 
 export interface RepositoryListResponse {
   items: RepositoryView[];
+  nextPage?: number | null;
 }
 
 export interface IssueListItem {
@@ -275,6 +276,7 @@ export interface IssueListItem {
 
 export interface IssueListResponse {
   items: IssueListItem[];
+  nextPage?: number | null;
 }
 
 export interface TokenResponse {

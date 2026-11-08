@@ -19,11 +19,11 @@
 
 ## 2. References (what to take, what to leave)
 
-| Reference | Take | Leave |
-|-----------|------|-------|
-| 21st.dev black landing template | Centered hero, pill announcement badge, two-line display headline fading white to grey, one white CTA, soft light bloom rising behind a cropped product mockup, minimal top bar | Amber bloom, "template" copy, floating dev toolbar, generic CRM mock |
-| Red-accent editorial shot | **One** red word in the headline; red light as atmosphere (rays, reflections) on dark stone; everything else monochrome | Photography, arch shape, serif type |
-| vyanahealth.app (landing structure) | Sticky nav, pill badge, huge headline, 3 CTAs, product shown below, long scrolling site with distinct sections | Light theme palette, phone mockup |
+| Reference                             | Take | Leave |
+|---------------------------------------|------|-------|
+| 21st.dev black landing template       | Centered hero, pill announcement badge, two-line display headline fading white to grey, one white CTA, soft light bloom rising behind a cropped product mockup, minimal top bar | Amber bloom, "template" copy, floating dev toolbar, generic CRM mock |
+| Red-accent editorial shot             | **One** red word in the headline; red light as atmosphere (rays, reflections) on dark stone; everything else monochrome | Photography, arch shape, serif type |
+| Professional apps (landing structure) | Sticky nav, pill badge, huge headline, 3 CTAs, product shown below, long scrolling site with distinct sections | Light theme palette, phone mockup |
 
 ## 3. Signal Red Budget (strict)
 

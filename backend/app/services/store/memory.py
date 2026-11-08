@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import tempfile
 import threading
+import time
+from app.core.errors import PersistenceError, public_error
 from collections.abc import Callable
 from datetime import datetime
 from typing import TypeVar
@@ -65,33 +67,85 @@ class MemoryStore(Store):
         self._docs: dict[str, Doc] = {}
         self._lock = threading.RLock()
         self._state_path = Path(state_path) if state_path else None
-        if self._state_path and self._state_path.exists():
-            self._docs = json.loads(self._state_path.read_text(encoding="utf-8"),
-                                    object_hook=lambda v: datetime.fromisoformat(v["__datetime__"])
-                                    if set(v) == {"__datetime__"} else v)
-            if not isinstance(self._docs, dict):
-                raise ValueError("Local state file must contain a document dictionary.")
+        self._owner = None
+        self._owner_pid = os.getpid()
+        if self._state_path:
+            self._state_path = self._state_path.resolve()
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            self._owner = open(str(self._state_path) + ".lock", "a+b")
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    self._owner.seek(0)
+                    if not self._owner.read(1):
+                        self._owner.write(b"0")
+                        self._owner.flush()
+                    self._owner.seek(0)
+                    msvcrt.locking(self._owner.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(self._owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                self._owner.close()
+                self._owner = None
+                raise PersistenceError("Local state is already owned. Use the embedded worker or Firestore for separate processes.") from None
+        try:
+            if self._state_path and self._state_path.exists():
+                self._docs = json.loads(self._state_path.read_text(encoding="utf-8"),
+                                        object_hook=lambda v: datetime.fromisoformat(v["__datetime__"])
+                                        if set(v) == {"__datetime__"} else v)
+                if not isinstance(self._docs, dict):
+                    raise ValueError("Local state file must contain a document dictionary.")
+        except Exception:
+            self.close()
+            raise
+
+    def close(self):
+        if self._owner is not None:
+            self._owner.close()
+            self._owner = None
+
+    def __del__(self):
+        self.close()
 
     def _persist(self, docs) -> None:
         if self._state_path is None:
             return
+        if self._owner is None or self._owner_pid != os.getpid():
+            raise PersistenceError("Local state ownership is no longer valid. Reopen the store in a single process.")
         def encode(value):
             if isinstance(value, datetime):
                 return {"__datetime__": value.isoformat()}
             raise TypeError(type(value).__name__)
-        self._state_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = None
         try:
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self._state_path.parent,
                                              prefix=".gitresolve-state-", delete=False) as stream:
                 temporary = Path(stream.name)
                 json.dump(docs, stream, default=encode)
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temporary, self._state_path)
+            for attempt in range(5):
+                try:
+                    os.replace(temporary, self._state_path)
+                    break
+                except PermissionError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.025 * 2 ** attempt)
+        except (OSError, TypeError, ValueError) as exc:
+            raise PersistenceError(public_error(exc).message) from exc
         finally:
-            if temporary and temporary.exists():
-                temporary.unlink()
+            if temporary:
+                for attempt in range(5):
+                    try:
+                        temporary.unlink(missing_ok=True)
+                        break
+                    except PermissionError as exc:
+                        if attempt == 4:
+                            raise PersistenceError(public_error(exc).message) from exc
+                        time.sleep(0.025 * 2 ** attempt)
 
     def run_transaction(self, fn: Callable[[Txn], T]) -> T:
         with self._lock:
@@ -99,7 +153,8 @@ class MemoryStore(Store):
             txn = _MemTxn(docs)
             result = fn(txn)
             txn.commit()
-            self._persist(docs)
+            if docs != self._docs:
+                self._persist(docs)
             self._docs = docs
             return result
 
@@ -112,7 +167,8 @@ class MemoryStore(Store):
         with self._lock:
             docs = copy.deepcopy(self._docs) if self._state_path else self._docs
             docs[path] = copy.deepcopy(data)
-            self._persist(docs)
+            if docs != self._docs:
+                self._persist(docs)
             self._docs = docs
 
     def _tasks(self) -> list[Doc]:

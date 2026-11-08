@@ -6,6 +6,7 @@ from datetime import datetime, time, timedelta, timezone
 from typing import Any
 
 from app.core.config import Settings
+from app.core.redaction import redact
 from app.core.errors import ApiError, invalid_state, not_found
 from app.schemas.enums import (
     ApprovalState,
@@ -17,7 +18,7 @@ from app.schemas.enums import (
 )
 from app.services.github import GitHubGateway, GitHubUnavailable, IssueInfo, RepositoryInfo
 from app.services.ids import task_id_for
-from app.services.lifecycle import PR_RETRY_STATUSES, is_active
+from app.services.lifecycle import PR_RETRY_STATUSES, TERMINAL_STATUSES, is_active
 from app.services.store.base import DELETE_FIELD, AlreadyExists, Doc, Store, Txn
 from app.services.transitions import (
     EventSpec,
@@ -108,19 +109,46 @@ class TaskService:
     def get_task(self, user_id: str, task_id: str) -> Doc:
         """`get_task_for_user`: missing, expired and foreign tasks all raise 404."""
         task = self.store.get(task_path(task_id))
-        if task is None or task["userId"] != user_id:
+        if task is None or task["userId"] != user_id or task.get("historyDeletedAt"):
             raise not_found()
         if task.get("expiresAt") is not None and task["expiresAt"] <= self.clock():
             raise not_found()
         return task
 
     def list_tasks(self, user_id: str, limit: int, cursor: str | None) -> tuple[list[Doc], str | None]:
-        rows = self.store.list_user_tasks(user_id, limit + 1, cursor)
         now = self.clock()
-        rows = [r for r in rows if r.get("expiresAt") is None or r["expiresAt"] > now]
+        rows = []
+        scan_cursor = cursor
+        while len(rows) <= limit:
+            batch = self.store.list_user_tasks(user_id, 50, scan_cursor)
+            rows.extend(r for r in batch if not r.get("historyDeletedAt") and
+                        (r.get("expiresAt") is None or r["expiresAt"] > now))
+            if len(batch) < 50:
+                break
+            scan_cursor = batch[-1]["id"]
         page = rows[:limit]
         next_cursor = page[-1]["id"] if len(rows) > limit and page else None
         return page, next_cursor
+
+    def delete_history(self, user_id: str) -> int:
+        """Remove finished attempts from user-visible history, retaining quota/audit records."""
+        cutoff = self.clock()
+        cursor = None
+        deleted = 0
+        while True:
+            batch = self.store.list_user_tasks(user_id, 50, cursor)
+            for row in batch:
+                def remove(txn: Txn) -> bool:
+                    task = txn.get(task_path(row["id"]))
+                    if (not task or task.get("userId") != user_id or task.get("historyDeletedAt")
+                            or task["status"] not in TERMINAL_STATUSES or task["createdAt"] > cutoff):
+                        return False
+                    txn.update(task_path(row["id"]), {"historyDeletedAt": cutoff})
+                    return True
+                deleted += int(self.store.run_transaction(remove))
+            if len(batch) < 50:
+                return deleted
+            cursor = batch[-1]["id"]
 
     def list_events(self, user_id: str, task_id: str, after: int, limit: int) -> tuple[list[Doc], int]:
         self.get_task(user_id, task_id)
@@ -144,6 +172,8 @@ class TaskService:
         art = self.store.get(artifact_path(task_id, artifact_id))
         if art is None or (art.get("expiresAt") is not None and art["expiresAt"] <= self.clock()):
             raise not_found()
+        if artifact_id == "final_diff" and redact(art["content"]) != art["content"]:
+            raise invalid_state("The stored diff contains private data. Generate a new fix before review.")
         return art
 
     # --- Repository access (delegated to GitHub boundary) -----------------------
@@ -416,6 +446,9 @@ class TaskService:
                 raise invalid_state("This task is not awaiting approval.")
             if revision != task.get("gateRevision", 0):
                 raise ApiError(409, "stale_review", "The review changed. Review the updated fix before approving.")
+            artifact = txn.get(artifact_path(task_id, "final_diff"))
+            if artifact and redact(artifact["content"]) != artifact["content"]:
+                raise invalid_state("The stored diff contains private data. Generate a new fix before review.")
             stored = task.get("finalDiffHash")
             if not stored or diff_hash != stored:
                 raise ApiError(

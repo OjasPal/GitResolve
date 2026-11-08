@@ -13,7 +13,8 @@ from typing import Any
 
 from app.core.config import Settings
 from app.core.errors import ApiError, invalid_state, not_found
-from app.core.redaction import redact
+from app.core.redaction import redact, redact_value
+from app.core.errors import safe_message
 from app.schemas.enums import EventLevel, EventType, TaskStage, TaskStatus
 from app.services.ids import event_id
 from app.services.lifecycle import (
@@ -111,7 +112,8 @@ def build_event(task: Doc, seq: int, stage: str, spec: EventSpec, now: datetime,
     # Metadata is a closed, scalar-only vocabulary, never arbitrary tool output.
     allowed = {"from", "to", "stage", "code", "n", "number", "diffHash",
                "durationMs", "ran", "passed", "failed", "timedOut", "attempt",
-               "modelCalls", "inputTokens", "outputTokens", "execSeconds", "model", "statusCode", "errorType"}
+               "modelCalls", "inputTokens", "outputTokens", "execSeconds", "model", "statusCode", "errorType",
+               "kind", "resumeCount", "lane", "riskFloor"}
     data = {
         key: redact(value, 200) if isinstance(value, str) else value
         for key, value in spec.data.items()
@@ -126,7 +128,7 @@ def build_event(task: Doc, seq: int, stage: str, spec: EventSpec, now: datetime,
         "stage": stage,
         "type": spec.type.value,
         "level": spec.level.value,
-        "message": redact(spec.message, EVENT_MESSAGE_MAX),
+        "message": safe_message(spec.message, EVENT_MESSAGE_MAX),
         "data": data,
         "expiresAt": task["createdAt"] + timedelta(days=settings.subdoc_retention_days),
     }
@@ -145,7 +147,7 @@ def apply_change(
 ) -> Doc:
     """Validate and write one change; returns the task document after the write."""
     task = ctx.task
-    upd: dict[str, Any] = dict(updates or {})
+    upd: dict[str, Any] = redact_value(dict(updates or {}))
     pending_events = list(events or [])
     user_update: dict[str, Any] | None = None
     current = TaskStatus(task["status"])

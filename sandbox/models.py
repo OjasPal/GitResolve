@@ -15,6 +15,7 @@ class ExecutionRequest(BaseModel):
     max_output_bytes: int = Field(default=1_000_000, ge=1_000, le=1_048_576)
     patch: str = Field(default="", max_length=100_000)
     max_diff_lines: int = Field(default=150, ge=1, le=400)
+    prepare_dependencies: bool = False
     profile: Literal["python", "streamlit"] = "python"
     ui_entrypoint: str = Field(default="", max_length=200)
     require_ui_checks: bool = False
@@ -77,6 +78,7 @@ class ExecutionRequest(BaseModel):
 
 
 class ExecutionResult(BaseModel):
+    baseline_cache_hit: bool = False
     execution_id: str
     status: Literal["passed", "failed", "timed_out", "error"]
     exit_code: int | None = None

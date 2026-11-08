@@ -98,12 +98,5 @@ def create_usage_record(
 
 def sanitize_error(error: Exception | str) -> str:
     """Sanitize error messages to avoid leaking keys, credentials, or file paths."""
-    err_str = str(error)
-    # Simple redaction for potential keys or tokens
-    import re
-    # Match patterns like AQ.Ab..., Bearer ey..., key=..., password=...
-    sanitized = re.sub(r"(AIza[0-9A-Za-z-_]{35})", "[REDACTED_API_KEY]", err_str)
-    sanitized = re.sub(r"(AQ\.[0-9A-Za-z-_]{40,})", "[REDACTED_API_KEY]", sanitized)
-    sanitized = re.sub(r"(Bearer\s+)[A-Za-z0-9_\-\.]+", r"\1[REDACTED_TOKEN]", sanitized)
-    sanitized = re.sub(r"(api[_-]?key[\s:=]+)[A-Za-z0-9_\-]+", r"\1[REDACTED]", sanitized, flags=re.IGNORECASE)
-    return sanitized
+    from app.core.errors import public_error
+    return public_error(error if isinstance(error, Exception) else RuntimeError(error)).message

@@ -6,7 +6,7 @@
 ## 1. Decisions at a glance
 - **Frontend:** Next.js, React, TypeScript, Tailwind; deploy to Vercel (`gitresolve.vercel.app`, availability to verify).
 - **API:** Python + FastAPI on Google Cloud Run.
-- **Agent:** LangGraph; LangChain only when useful; Gemini primary, optional Groq fallback.
+- **Agent:** LangGraph; LangChain only when useful; Google GenAI only.
 - **Persistence and queue:** Firestore Native mode, `(default)` database, `asia-south1` (verify region availability before creation).
 - **Retrieval:** lexical search first; Firestore vector search only if a benchmark proves useful.
 - **GitHub:** GitHub App; no personal access tokens or webhooks in MVP.
@@ -28,7 +28,7 @@ flowchart LR
   FE -->|HTTPS + JWT| API[FastAPI / Cloud Run]
   API <--> DB[(Firestore)]
   DB --> W[Worker / LangGraph]
-  W --> LLM[Gemini or Groq]
+  W --> LLM[Google GenAI]
   W --> GH[GitHub App API]
   W --> SB[Docker sandbox]
   SM[Secret Manager] --> API
@@ -202,9 +202,9 @@ tasks/{taskId}
 
 ## 9. LLM integration and cost controls
 - Interfaces: `LLMClient.generate_structured(...)` and `Embedder.embed(...)`.
-- Adapters: Gemini primary; Groq optional fallback. Keep provider/model configurable, not hard-coded.
+- Adapters: Google GenAI only. Keep provider/model configurable, not hard-coded.
 - **Open decision:** Gemini API key (AI Studio) vs Vertex AI; decide early. Vertex uses service-account identity and may consume GCP credits.
-- Per-call timeout 60 seconds; up to 2 retries on 429/5xx; optional Groq fallback only when explicitly enabled.
+- Per-call timeout 60 seconds; up to 2 retries on 429/5xx; configured Google GenAI fallback.
 - Validate structured outputs with Pydantic; allow one JSON repair retry.
 - Enforce call/token/time budgets in code and record usage per task.
 - Prompt-injection controls:
@@ -225,12 +225,10 @@ GITHUB_APP_CLIENT_SECRET=replace_with_dev_github_app_client_secret
 GITHUB_APP_PRIVATE_KEY=replace_with_dev_github_app_private_key_pem
 GEMINI_API_KEY=replace_with_dev_gemini_api_key
 
-# Optional: only if Groq fallback is enabled
-GROQ_API_KEY=replace_with_dev_groq_api_key
 ```
 
 - IDs, project/database names, models, URLs, ports, limits and sandbox settings are **not secrets**. `NEXT_PUBLIC_API_BASE_URL` is public; configure it in Vercel.
-- Production Secret Manager: `session-jwt-secret`, `github-app-private-key`, `github-app-client-secret`, `gemini-api-key`, optional `groq-api-key`.
+- Production Secret Manager: `session-jwt-secret`, `github-app-private-key`, `github-app-client-secret`, `gemini-api-key`.
 - Use separate dev credentials. Ignore `.env*` except the example, `secrets/`, `*.pem` and service-account JSON. Never use `NEXT_PUBLIC_` for credentials.
 
 ### IAM

@@ -10,7 +10,7 @@ from app.schemas.enums import FailureCode
 from app.services.worker_service import ExecutionLimit
 
 
-def execute(ctx, *, commit_sha: str, command: list[str], patch: str = ""):
+def execute(ctx, *, commit_sha: str, command: list[str], patch: str = "", baseline=False):
     """Execute pinned public repository code with the task's remaining budget.
 
     Returns ExecutionResult. A passing process is not proof of a fixed bug;
@@ -42,6 +42,7 @@ def execute(ctx, *, commit_sha: str, command: list[str], patch: str = ""):
         execution_id=ctx.task_id, repo_url=f"https://github.com/{task['repoFullName']}",
         commit_sha=commit_sha, command=command, timeout_seconds=math.floor(remaining), patch=patch,
         max_diff_lines=task["limits"]["maxDiffLines"],
+        prepare_dependencies=getattr(ctx, "prepare_dependencies", False),
         profile=getattr(ctx, "sandbox_profile", "python"), ui_entrypoint=getattr(ctx, "ui_entrypoint", ""),
         require_ui_checks=getattr(ctx, "require_ui_checks", False),
         require_ui_interaction=getattr(ctx, "require_ui_interaction", False),
@@ -65,6 +66,8 @@ def execute(ctx, *, commit_sha: str, command: list[str], patch: str = ""):
             stopped.append(exc)
             return True  # store outages must stop execution too
     kwargs = {}
+    if baseline and not patch:
+        kwargs['baseline_scope'] = f"{task['userId']}:{task['repoId']}"
     source_errors = []
     if ctx.github is not None:
         provider = ctx.github.source(task)
@@ -87,18 +90,43 @@ def execute(ctx, *, commit_sha: str, command: list[str], patch: str = ""):
         raise source_errors[0]
     ctx.checkpoint()
     ctx.usage(execSeconds=task["budgets"]["execSeconds"] + result.duration_ms / 1000)
+    if getattr(result, 'baseline_cache_hit', False):
+        from app.schemas.enums import EventType
+        ctx.event(EventType.INFO, 'Reused a verified original baseline for this pinned snapshot; patched verification still runs in Docker.')
     import re
     from app.services.ids import sha256_hash
     from app.services.publication_patch import publication_patch
     strip_tests = getattr(ctx, "sandbox_only_tests", False)
     published_patch = publication_patch(patch) if strip_tests else patch
+    verify_oracle = bool(getattr(ctx, "verify_static_oracle", False))
+    oracle_orig_failed = bool(getattr(ctx, "oracle_original_failed", False))
+    oracle_gate_ok = bool(
+        verify_oracle
+        and patch
+        and result.status == "passed"
+        and result.exit_code == 0
+        and not result.oom_killed
+        and result.cleanup_ok
+        and "STATIC ORACLE GATE PASSED: V0=ok V1=ok" in (result.stdout or "")
+    )
     ctx._svc.record_sandbox(ctx.task_id, ctx.worker_id, {
         "source": "docker", "baseSha": commit_sha, "diffHash": sha256_hash(published_patch),
         **({"verificationPatch": patch} if strip_tests else {}),
         "command": command, "passed": result.status == "passed" and result.exit_code == 0
             and not result.oom_killed and result.cleanup_ok,
         "executionId": result.execution_id,
+        "baselineCacheHit": getattr(result, 'baseline_cache_hit', False),
         **({"allowedDeletions":deletion_names,"cleanupVerified":bool(patch and result.exit_code==0 and "CLEANUP GATE PASSED:" in result.stdout)} if deletion_names else {}),
+        **({
+            "staticOracleReceipt": {
+                "verified": bool(oracle_gate_ok and oracle_orig_failed),
+                "originalFailed": oracle_orig_failed,
+                "patchedPassed": oracle_gate_ok,
+                "baseSha": commit_sha,
+                "diffHash": sha256_hash(published_patch),
+                "executionId": result.execution_id,
+            }
+        } if verify_oracle else {}),
         "testsRun": sum(int(n) for n in re.findall(r"\b(\d+) passed\b", result.stdout))
                     if command[:3] == ["python", "-m", "pytest"]
                     and not any(arg in {"--collect-only", "--co", "--version", "--help", "-h"} for arg in command) else 0,

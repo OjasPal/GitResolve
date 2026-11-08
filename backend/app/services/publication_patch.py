@@ -26,6 +26,25 @@ def validate_publication(diff, limits, evidence, base_sha, receipt, cleanup_scop
             raise ValueError("Cleanup requires trusted deletion and compatibility checks.")
         validate_fix(diff,limits,evidence,base_sha,require_regression=False,allowed_deletions=names)
         return
+    if evidence.get("lane") == "fast" and evidence.get("verificationLevel") in {"V0", "V1"}:
+        from app.services.ids import sha256_hash
+        oracle_receipt = receipt.get("staticOracleReceipt") if isinstance(receipt, dict) else None
+        if receipt:
+            if (
+                receipt.get("source") != "docker"
+                or receipt.get("passed") is not True
+                or receipt.get("baseSha") != base_sha
+                or receipt.get("diffHash") != sha256_hash(diff)
+                or not isinstance(oracle_receipt, dict)
+                or oracle_receipt.get("verified") is not True
+                or oracle_receipt.get("originalFailed") is not True
+                or oracle_receipt.get("patchedPassed") is not True
+                or oracle_receipt.get("baseSha") != base_sha
+                or oracle_receipt.get("diffHash") != sha256_hash(diff)
+            ):
+                raise ValueError("Fast-lane static verification requires a trusted Docker oracle receipt for the exact base SHA and diff hash.")
+        validate_fix(diff, limits, evidence, base_sha, require_regression=False, allow_static_oracle=True)
+        return
     tested = receipt.get("verificationPatch")
     if tested is not None:
         validate_fix(tested, limits, evidence, base_sha)

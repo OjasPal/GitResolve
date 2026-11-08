@@ -14,7 +14,9 @@ import uuid
 from app.agent.interface import AgentRunner, AgentTask
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
+from app.core.errors import public_error, PersistenceError
 from app.core.redaction import redact
+from app.services.outcomes import OUTCOME_CODES
 from app.schemas.enums import DispatchPhase, FailureCode, TaskStage, EventType, ArtifactType
 from app.services.github import WorkerGitHubGateway
 from app.services.store import build_store
@@ -35,14 +37,18 @@ class _HeartbeatThread(threading.Thread):
         self._svc, self._task_id, self._worker_id = service, task_id, worker_id
         self._interval = interval
         self._halt = threading.Event()
+        self.stopped = threading.Event()
+        self.failure_count = 0
 
     def run(self) -> None:
         while not self._halt.wait(self._interval):
             try:
                 if self._svc.heartbeat(self._task_id, self._worker_id):
+                    self.stopped.set()
                     self._svc.mark_cancelled(self._task_id, self._worker_id)
                     return
             except ExecutionLimit as exc:
+                self.stopped.set()
                 try:
                     task = self._svc.store.get(f"tasks/{self._task_id}")
                     self._svc.fail(self._task_id, self._worker_id, exc.code,
@@ -51,9 +57,24 @@ class _HeartbeatThread(threading.Thread):
                     pass
                 return
             except LeaseLost:
+                self.stopped.set()
                 return
             except Exception:  # transient store errors: retry next tick
-                log.exception("heartbeat failed", extra={"task_id": self._task_id})
+                self.failure_count += 1
+                try:
+                    fields = self._svc.lease_diagnostics(self._task_id, self.failure_count)
+                    task = self._svc.store.get(f"tasks/{self._task_id}") or {}
+                    if not task.get("leaseExpiresAt") or task["leaseExpiresAt"] <= self._svc.clock():
+                        self.stopped.set()
+                except Exception:
+                    fields = {"task_id": self._task_id, "failure_count": self.failure_count}
+                    self.stopped.set()  # cannot establish lease validity
+                log.exception("heartbeat failed", extra=fields)
+                if self.stopped.is_set():
+                    return
+            else:
+                self.failure_count = 0
+                log.debug("heartbeat renewed", extra=self._svc.lease_diagnostics(self._task_id))
 
     def stop(self) -> None:
         self._halt.set()
@@ -102,8 +123,15 @@ class Worker:
 
     def process(self, job: ClaimedJob) -> None:
         beat = _HeartbeatThread(self.service, job.task_id, self.worker_id, self.settings.heartbeat_seconds)
+        log.info("processing job", extra=self.service.lease_diagnostics(job.task_id))
         beat.start()
         ctx = JobContext(self.service, job.task_id, self.worker_id, self.github)
+        ctx.stopped = beat.stopped
+        from contextlib import ExitStack
+        from githubapp.timing import model_dispatch_scope, observe_timings
+        timing_scope = ExitStack()
+        timing_scope.enter_context(model_dispatch_scope(ctx.model_dispatched))
+        timing_scope.enter_context(observe_timings(ctx.observe_timing))
         try:
             ctx.checkpoint()
             if job.phase == DispatchPhase.PLAN:
@@ -131,13 +159,16 @@ class Worker:
                                                       "GitHub operation failed.", job.phase))
                 return
             log.exception("job failed", extra={"task_id": job.task_id})
-            message = redact(f"{type(exc).__name__}: {exc}", 400)
+            message = public_error(exc).message
             self._safely(
                 lambda: self.service.fail(
-                    job.task_id, self.worker_id, FailureCode.INTERNAL_ERROR, message, job.phase
+                    job.task_id, self.worker_id, FailureCode.INTERNAL_ERROR, message, job.phase,
+                    outcome="infra_retry" if isinstance(exc, (PersistenceError, TimeoutError, ConnectionError)) else None
                 )
             )
         finally:
+            timing_scope.__exit__(None, None, None)
+            ctx.flush_timing()
             beat.stop()
             beat.join(timeout=2)
 
@@ -166,6 +197,8 @@ class Worker:
         ctx.checkpoint()
         if result.outcome == "ready" and result.plan is not None:
             self.service.complete_plan(job.task_id, self.worker_id, result.plan)
+            from app.worker.prewarm import start
+            start(self.service, self.github, job.task_id)
         elif result.outcome == "needs_input":
             self.service.fail(
                 job.task_id, self.worker_id, FailureCode.ISSUE_AMBIGUOUS,
@@ -174,8 +207,10 @@ class Worker:
         else:
             self.service.fail(
                 job.task_id, self.worker_id,
-                result.failure_code or FailureCode.INTERNAL_ERROR,
+                result.failure_code or OUTCOME_CODES.get(result.outcome, FailureCode.INTERNAL_ERROR),
                 result.failure_message or "Planning failed.", DispatchPhase.PLAN,
+                outcome=result.outcome if result.outcome in OUTCOME_CODES else None,
+                evidence=result.evidence, next_step=result.next_step, plan=result.plan,
             )
 
     def _execute(self, job: ClaimedJob, ctx: JobContext) -> None:
@@ -188,8 +223,10 @@ class Worker:
         else:
             self.service.fail(
                 job.task_id, self.worker_id,
-                result.failure_code or FailureCode.NO_FIX_FOUND,
+                result.failure_code or OUTCOME_CODES.get(result.outcome, FailureCode.NO_FIX_FOUND),
                 result.failure_message or "No fix was produced.", DispatchPhase.EXECUTE,
+                outcome=result.outcome if result.outcome in OUTCOME_CODES else None,
+                evidence=result.evidence, next_step=result.next_step,
             )
 
     def _create_pr(self, job: ClaimedJob) -> None:
@@ -204,6 +241,7 @@ class Worker:
             or approval.get("diffHash") != actual_hash
             or task.get("finalDiffHash") != actual_hash
             or artifact.get("truncated")
+            or redact(artifact["content"]) != artifact["content"]
         ):
             raise PullRequestError(FailureCode.INTERNAL_ERROR, "Stored diff does not match the approved diff.")
         self.service.heartbeat(job.task_id, self.worker_id)

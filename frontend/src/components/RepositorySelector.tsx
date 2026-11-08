@@ -19,6 +19,8 @@ interface RepositorySelectorProps {
   loading?: boolean;
   error?: string | null;
   onRefresh?: () => void;
+  onLoadMore?: () => void;
+  loadingMore?: boolean;
 }
 
 export function RepositorySelector({
@@ -28,6 +30,8 @@ export function RepositorySelector({
   loading = false,
   error = null,
   onRefresh,
+  onLoadMore,
+  loadingMore,
 }: RepositorySelectorProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -82,14 +86,14 @@ export function RepositorySelector({
         type="button"
         aria-expanded={isOpen}
         aria-haspopup="dialog"
-        disabled={loading}
+        disabled={loading && repositories.length === 0}
         onKeyDown={e=>{if(e.key==="Escape")setIsOpen(false)}}
         onClick={() => setIsOpen((prev) => !prev)}
         className="w-full px-3.5 py-2.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-left flex items-center justify-between gap-3 text-sm hover:border-neutral-400 dark:hover:border-neutral-600 transition-colors disabled:opacity-50 cursor-pointer"
       >
         <div className="flex items-center gap-2.5 min-w-0">
           <FolderGit2 className="w-4 h-4 text-neutral-500 shrink-0" />
-          {loading ? (
+          {loading && repositories.length === 0 ? (
             <span className="text-neutral-400 text-sm">Loading accessible repositories...</span>
           ) : selectedRepo ? (
             <div className="flex items-center gap-2 truncate">
@@ -204,6 +208,7 @@ export function RepositorySelector({
               })
             )}
           </div>
+          {onLoadMore && <button type="button" className="button w-full" onClick={onLoadMore} disabled={loadingMore}>{loadingMore ? "Loading…" : "Load more repositories"}</button>}
         </div>
       )}
     </div>

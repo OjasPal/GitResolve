@@ -32,7 +32,7 @@ export function GitHubAuthModal() {
     <Dialog.Root open={isAuthModalOpen} onOpenChange={(open) => { if (!open) closeAuthModal(); }}>
       <Dialog.Portal>
         <Dialog.Overlay className="modal-scrim" />
-        <Dialog.Content className="approval-modal" aria-describedby="auth-modal-description">
+        <Dialog.Content className="approval-modal github-auth-modal" aria-describedby="auth-modal-description">
           <div className="flex items-start justify-between gap-4 mb-4">
             <div className="flex items-center gap-3">
               <GithubMark size={32} />
@@ -68,35 +68,11 @@ export function GitHubAuthModal() {
                 </div>
               )}
 
-              <div className="permission-grid py-4 my-3 text-xs border-y border-[var(--stroke)]">
-                <div>
-                  <h3 className="font-mono text-xs uppercase tracking-wider mb-2 text-[var(--text-3)]">
-                    Reads Now
-                  </h3>
-                  <ul className="space-y-1 text-[var(--text-2)]">
-                    <li>• Repository code</li>
-                    <li>• GitHub issues</li>
-                    <li>• Repository metadata</li>
-                  </ul>
-                </div>
-                <div>
-                  <h3 className="font-mono text-xs uppercase tracking-wider mb-2 text-[var(--text-3)]">
-                    Writes (Upon Approval)
-                  </h3>
-                  <ul className="space-y-1 text-[var(--text-2)]">
-                    <li>• Proposed repair branch</li>
-                    <li>• Draft pull request</li>
-                    <li>• Never auto-merges</li>
-                  </ul>
-                </div>
-              </div>
-
-              {appUrl && (
-                <div className="p-3 bg-[var(--glass)] border border-[var(--stroke)] rounded text-xs text-[var(--text-2)] space-y-1">
-                  <p className="font-medium text-[var(--text)]">First time setup?</p>
-                  <p>Install the GitHub App on the repositories you want GitResolve to analyze, then authorize your account.</p>
-                </div>
-              )}
+              <ol className="auth-setup-steps" aria-label="Connect GitHub in two steps">
+                <li><span aria-hidden="true">01</span><div><h3>Choose your repositories</h3><p>Install GitResolve Agent on your account or organization and select the repositories you want to use.</p></div></li>
+                <li><span aria-hidden="true">02</span><div><h3>Connect your account</h3><p>Authorize GitHub, then return here to continue to {sectionName}.</p></div></li>
+              </ol>
+              <p className="auth-setup-hint">Already installed the app? Go straight to Authorize GitHub. <a href="/help#section-1" className="underline underline-offset-4">View setup help ↗</a></p>
             </div>
           </Dialog.Description>
 

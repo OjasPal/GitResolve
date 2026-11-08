@@ -1,0 +1,694 @@
+[
+  {
+    "operation": "repositories",
+    "pass": 1,
+    "duration_ms": 19600.4,
+    "items": 18,
+    "spans": [
+      {
+        "operation": "github.request",
+        "duration_ms": 638.264,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 582.512,
+        "ok": true
+      },
+      {
+        "operation": "github.token",
+        "duration_ms": 608.51,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 739.119,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 677.2,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 688.86,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 750.599,
+        "ok": true
+      },
+      {
+        "operation": "github.token",
+        "duration_ms": 777.505,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 842.509,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 676.773,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 690.743,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 563.924,
+        "ok": true
+      },
+      {
+        "operation": "github.token",
+        "duration_ms": 590.017,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 772.608,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 685.909,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 702.035,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 688.85,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 801.511,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 958.653,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 684.299,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 1000.362,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 812.192,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 740.558,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 656.018,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 659.494,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 648.495,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 735.158,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 700.79,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 716.837,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 657.465,
+        "ok": true
+      },
+      {
+        "operation": "github.repositories",
+        "duration_ms": 19600.377,
+        "ok": true
+      }
+    ]
+  },
+  {
+    "operation": "issues",
+    "pass": 1,
+    "duration_ms": 20964.311,
+    "items": 0,
+    "spans": [
+      {
+        "operation": "github.request",
+        "duration_ms": 574.91,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 621.091,
+        "ok": true
+      },
+      {
+        "operation": "github.token",
+        "duration_ms": 647.016,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 799.584,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 692.581,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 680.644,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 630.096,
+        "ok": true
+      },
+      {
+        "operation": "github.token",
+        "duration_ms": 657.613,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 808.068,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 796.974,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 770.271,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 555.796,
+        "ok": true
+      },
+      {
+        "operation": "github.token",
+        "duration_ms": 581.838,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 837.8,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 683.857,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 685.344,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 695.631,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 666.965,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 1038.506,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 729.308,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 685.524,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 1063.688,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 650.18,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 600.767,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 669.538,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 638.942,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 595.607,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 661.528,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 749.363,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 729.239,
+        "ok": true
+      },
+      {
+        "operation": "github.repositories",
+        "duration_ms": 19417.273,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 738.933,
+        "ok": true
+      },
+      {
+        "operation": "github.token",
+        "duration_ms": 764.703,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 782.244,
+        "ok": true
+      },
+      {
+        "operation": "github.issues",
+        "duration_ms": 20964.288,
+        "ok": true
+      }
+    ]
+  },
+  {
+    "operation": "repositories",
+    "pass": 2,
+    "duration_ms": 19295.848,
+    "items": 18,
+    "spans": [
+      {
+        "operation": "github.request",
+        "duration_ms": 556.131,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 550.586,
+        "ok": true
+      },
+      {
+        "operation": "github.token",
+        "duration_ms": 577.237,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 714.285,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 722.641,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 711.743,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 616.539,
+        "ok": true
+      },
+      {
+        "operation": "github.token",
+        "duration_ms": 642.06,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 983.112,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 813.484,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 686.373,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 556.869,
+        "ok": true
+      },
+      {
+        "operation": "github.token",
+        "duration_ms": 581.792,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 884.365,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 689.87,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 758.595,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 683.091,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 673.21,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 679.58,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 782.74,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 675.555,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 690.513,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 662.465,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 686.024,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 679.22,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 668.636,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 626.684,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 662.647,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 808.154,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 968.603,
+        "ok": true
+      },
+      {
+        "operation": "github.repositories",
+        "duration_ms": 19295.822,
+        "ok": true
+      }
+    ]
+  },
+  {
+    "operation": "issues",
+    "pass": 2,
+    "duration_ms": 20535.194,
+    "items": 0,
+    "spans": [
+      {
+        "operation": "github.request",
+        "duration_ms": 669.547,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 564.539,
+        "ok": true
+      },
+      {
+        "operation": "github.token",
+        "duration_ms": 591.681,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 728.854,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 686.597,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 692.423,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 623.545,
+        "ok": true
+      },
+      {
+        "operation": "github.token",
+        "duration_ms": 648.789,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 737.794,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 685.093,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 863.765,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 660.077,
+        "ok": true
+      },
+      {
+        "operation": "github.token",
+        "duration_ms": 686.977,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 802.903,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 728.729,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 672.614,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 680.011,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 733.195,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 791.165,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 654.388,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 668.968,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 803.989,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 711.374,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 684.398,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 660.554,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 698.3,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 640.994,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 599.925,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 640.09,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 651.823,
+        "ok": true
+      },
+      {
+        "operation": "github.repositories",
+        "duration_ms": 18842.083,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 672.865,
+        "ok": true
+      },
+      {
+        "operation": "github.token",
+        "duration_ms": 700.253,
+        "ok": true
+      },
+      {
+        "operation": "github.request",
+        "duration_ms": 992.731,
+        "ok": true
+      },
+      {
+        "operation": "github.issues",
+        "duration_ms": 20535.169,
+        "ok": true
+      }
+    ]
+  }
+]

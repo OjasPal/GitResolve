@@ -1,0 +1,21 @@
+{
+  "accepted": false,
+  "calls": [
+    {
+      "provider": "google",
+      "model": "gemini-3.8-flash"
+    }
+  ],
+  "error_type": "FatalProviderError",
+  "usage": null,
+  "note": "Usage unavailable on rejected/failed response; not asserted zero.",
+  "spans": [
+    {
+      "operation": "model.generate",
+      "duration_ms": 548.884,
+      "ok": false,
+      "provider": "google",
+      "model": "gemini-3.8-flash"
+    }
+  ]
+}

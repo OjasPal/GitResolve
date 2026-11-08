@@ -1,0 +1,58 @@
+[
+  {
+    "mode": "production",
+    "route": "dashboard",
+    "pass": 1,
+    "http_ms": 143.3014,
+    "status": 200
+  },
+  {
+    "mode": "production",
+    "route": "settings",
+    "pass": 1,
+    "http_ms": 16.6467,
+    "status": 200
+  },
+  {
+    "mode": "production",
+    "route": "tasks",
+    "pass": 1,
+    "http_ms": 12.9608,
+    "status": 200
+  },
+  {
+    "mode": "production",
+    "route": "tasks/new",
+    "pass": 1,
+    "http_ms": 25.0623,
+    "status": 200
+  },
+  {
+    "mode": "production",
+    "route": "dashboard",
+    "pass": 2,
+    "http_ms": 4.0269,
+    "status": 200
+  },
+  {
+    "mode": "production",
+    "route": "settings",
+    "pass": 2,
+    "http_ms": 3.6999,
+    "status": 200
+  },
+  {
+    "mode": "production",
+    "route": "tasks",
+    "pass": 2,
+    "http_ms": 3.843,
+    "status": 200
+  },
+  {
+    "mode": "production",
+    "route": "tasks/new",
+    "pass": 2,
+    "http_ms": 3.894,
+    "status": 200
+  }
+]

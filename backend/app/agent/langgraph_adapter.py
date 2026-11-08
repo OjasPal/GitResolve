@@ -92,7 +92,7 @@ class LangGraphAgentRunner:
             ctx.event(EventType.INFO, "Planning model returned a response.")
         if result["status"] == "failed":
             return PlanResult(
-                "failed",
+                "infra_retry",
                 failure_code=FailureCode.LLM_UNAVAILABLE,
                 failure_message=result.get("error") or "Issue analysis failed.",
             )

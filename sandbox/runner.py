@@ -33,7 +33,7 @@ def _clean_output(raw: bytes | str, max_bytes: int) -> tuple[str, bool]:
 
 
 def _docker_run_args(container: str, repo_dir: Path, command: list[str], patch_path=None, max_diff_lines=150,
-                     profile="python", ui_entrypoint="", require_ui_checks=False, require_ui_interaction=False, require_ui_report=False, require_ui_answers=False, allowed_deletions=(), verify_cleanup=False) -> list[str]:
+                     profile="python", ui_entrypoint="", require_ui_checks=False, require_ui_interaction=False, require_ui_report=False, require_ui_answers=False, allowed_deletions=(), verify_cleanup=False, prepared_env=None) -> list[str]:
     args = [
         "docker", "run", "-d", "--pull", "never", "--name", container,
         "--user", "10001:10001", "--network", "none", "--read-only",
@@ -45,6 +45,9 @@ def _docker_run_args(container: str, repo_dir: Path, command: list[str], patch_p
         "--mount", f"type=bind,source={repo_dir},target=/input,readonly",
         "-e", "HOME=/tmp", "-e", f"GITRESOLVE_MAX_DIFF_LINES={max_diff_lines}", "--workdir", "/workspace",
     ]
+    if prepared_env:
+        args += ["--mount", f"type=volume,source={prepared_env},target=/opt/prepared,readonly",
+                 "-e", "PATH=/opt/prepared/bin:/usr/local/bin:/usr/bin:/bin"]
     if patch_path:
         args += ["--mount", f"type=bind,source={patch_path},target=/patch.diff,readonly"]
     if profile == "streamlit":
@@ -62,12 +65,14 @@ def _force_remove(func, path, _exc):
     func(path)
 
 
-def run_sandbox(request: ExecutionRequest, allow_local_repo: bool = False, cancel=None, *, source_provider=None) -> ExecutionResult:
+def run_sandbox(request: ExecutionRequest, allow_local_repo: bool = False, cancel=None, *, source_provider=None, baseline_scope=None) -> ExecutionResult:
     started = time.monotonic()
     deadline = started + request.timeout_seconds
     container = f"gitresolve-{request.execution_id}-{uuid.uuid4().hex[:8]}"
     workspace = None
     attempted = False
+    prepared_env = None
+    baseline_key = None
     result = ExecutionResult(execution_id=request.execution_id, status="error", commit_sha=request.commit_sha)
     try:
         checkpoint(deadline, cancel)
@@ -76,6 +81,32 @@ def run_sandbox(request: ExecutionRequest, allow_local_repo: bool = False, cance
         workspace = Path(tempfile.mkdtemp(prefix="gitresolve_"))
         repo = (source_provider(request, workspace, deadline, cancel) if source_provider
                 else acquire(request, workspace, deadline, cancel, allow_local_repo))
+        prepared_env = None
+        if request.prepare_dependencies:
+            from sandbox.profiler import profile_repository
+            from sandbox.environment import prepare_environment
+            profile = profile_repository(repo)
+            if profile.language == "unsupported":
+                raise SandboxError("unsupported_language", "Only Python repositories are supported.")
+            image = "gitresolve-sandbox:streamlit" if request.profile == "streamlit" else IMAGE
+            prepared_env = prepare_environment(repo, profile, image, workspace, deadline, cancel)
+        if baseline_scope and not request.patch:
+            from sandbox.baseline_cache import CACHE, key_for
+            from sandbox.profiler import profile_repository
+            from sandbox.dependencies import declared_requirements
+            _, dependency_hash = declared_requirements(repo, profile_repository(repo))
+            # The leased immutable volume identifies the actual resolved environment.
+            # Rebuild/eviction changes this identity and invalidates the baseline.
+            environment_hash = dependency_hash + ':' + (prepared_env or 'image-only')
+            image = 'gitresolve-sandbox:streamlit' if request.profile == 'streamlit' else IMAGE
+            inspected = capture(['docker', 'image', 'inspect', '--format', '{{.Id}}', image], deadline, cancel, 4096)
+            if inspected.returncode == 0:
+                baseline_key = key_for(request, baseline_scope, environment_hash, inspected.stdout.decode().strip())
+                cached = CACHE.get(baseline_key) if baseline_key else None
+                if cached is not None:
+                    checkpoint(deadline, cancel)
+                    result = cached.model_copy(update={'execution_id': request.execution_id, 'baseline_cache_hit': True})
+                    return result
         patch_path = None
         if request.patch:
             patch_path = workspace / "patch.diff"
@@ -83,7 +114,7 @@ def run_sandbox(request: ExecutionRequest, allow_local_repo: bool = False, cance
             patch_path.chmod(0o644)
         attempted = True
         start = capture(_docker_run_args(container, repo, request.command, patch_path, request.max_diff_lines,
-                        request.profile, request.ui_entrypoint, request.require_ui_checks, request.require_ui_interaction, request.require_ui_report, request.require_ui_answers, request.allowed_deletions, request.verify_cleanup), deadline, cancel, 8192)
+                        request.profile, request.ui_entrypoint, request.require_ui_checks, request.require_ui_interaction, request.require_ui_report, request.require_ui_answers, request.allowed_deletions, request.verify_cleanup, prepared_env), deadline, cancel, 8192)
         if start.returncode:
             raise SandboxError("docker_start_failed", "Docker could not start the sandbox.")
         while True:
@@ -143,6 +174,12 @@ def run_sandbox(request: ExecutionRequest, allow_local_repo: bool = False, cance
                 result.cleanup_ok = removed.returncode == 0
             except Exception:
                 result.cleanup_ok = False
+        if prepared_env is not None:
+            try:
+                from sandbox.environment import release_environment
+                release_environment(prepared_env)
+            except Exception:
+                result.cleanup_ok = False
         if workspace is not None:
             try:
                 shutil.rmtree(workspace, onexc=_force_remove)
@@ -153,4 +190,6 @@ def run_sandbox(request: ExecutionRequest, allow_local_repo: bool = False, cance
             result.error_code = "cleanup_failed"
             result.error_message = f"Cleanup failed for {container}; operator intervention required."
         result.duration_ms = int((time.monotonic() - started) * 1000)
+    from sandbox.baseline_cache import remember
+    remember(baseline_key, result)
     return result

@@ -3,7 +3,7 @@ from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
-from app.schemas.common import RequestModel, ResponseModel
+from app.schemas.common import PublicTaskModel, RequestModel, ResponseModel
 from app.schemas.enums import (
     Action,
     ApprovalState,
@@ -47,7 +47,7 @@ class GateChatRequest(RequestModel):
             raise ValueError("Write a message of up to 4,000 characters, or edit the request using its dedicated editor.")
         return self
 
-class GateMessage(ResponseModel):
+class GateMessage(PublicTaskModel):
     role: Literal["user", "assistant"]
     content: str
     gate: str
@@ -62,12 +62,12 @@ class ApproveRequest(RequestModel):
 
 
 # --- Shared nested shapes (also validated on worker writes) --------------------
-class IssueComment(ResponseModel):
+class IssueComment(PublicTaskModel):
     author: str | None = None
     body: str = Field(max_length=2048)
 
 
-class IssueView(ResponseModel):
+class IssueView(PublicTaskModel):
     number: int | None
     title: str | None = None
     url: str | None = None
@@ -77,14 +77,14 @@ class IssueView(ResponseModel):
     comments: list[IssueComment] = Field(default_factory=list, max_length=10)
 
 
-class IssueSummary(ResponseModel):
+class IssueSummary(PublicTaskModel):
     number: int | None
     title: str | None = None
     url: str | None = None
     labels: list[str] = Field(default_factory=list)
 
 
-class PlanData(ResponseModel):
+class PlanData(PublicTaskModel):
     """Plan contract between the agent and the API/UI."""
 
     title: str = Field(default="", max_length=100)
@@ -94,19 +94,19 @@ class PlanData(ResponseModel):
     questions: list[str] = Field(default_factory=list, max_length=10)
 
 
-class Attempts(ResponseModel):
+class Attempts(PublicTaskModel):
     used: int = 0
     max: int
 
 
-class Budgets(ResponseModel):
+class Budgets(PublicTaskModel):
     model_calls: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
     exec_seconds: float = 0
 
 
-class Limits(ResponseModel):
+class Limits(PublicTaskModel):
     max_repair_attempts: int
     max_model_calls: int
     task_timeout_seconds: int
@@ -115,21 +115,21 @@ class Limits(ResponseModel):
     max_diff_lines: int
 
 
-class Failure(ResponseModel):
+class Failure(PublicTaskModel):
     code: FailureCode
     message: str = Field(max_length=500)
     phase: DispatchPhase | None = None
     retryable: bool = False
 
 
-class Approval(ResponseModel):
+class Approval(PublicTaskModel):
     state: ApprovalState
     by: str | None = None
     at: datetime | None = None
     diff_hash: str | None = None
 
 
-class PullRequestView(ResponseModel):
+class PullRequestView(PublicTaskModel):
     number: int
     url: str
     branch: str
@@ -137,7 +137,9 @@ class PullRequestView(ResponseModel):
 
 
 # --- Responses ---------------------------------------------------------------
-class TaskResponse(ResponseModel):
+class TaskResponse(PublicTaskModel):
+    outcome: dict[str, Any] | None = None
+    user_message: str | None = None
     gate_messages: list[GateMessage] = Field(default_factory=list)
     gate_revision: int = 0
     gate_chat_busy: bool = False
@@ -175,13 +177,19 @@ class TaskResponse(ResponseModel):
         from app.services.lifecycle import available_actions
 
         failure = doc.get("failure") or {}
+        from app.services.outcomes import public_outcome
         data = dict(doc)
+        from app.core.errors import safe_message
+        if data.get("failure"):
+            data["failure"] = {**data["failure"], "message": safe_message(data["failure"]["message"], 500)}
+        data["outcome"] = public_outcome(data)
+        data["userMessage"] = data["outcome"]["explanation"] if data["outcome"] else None
         data["gateChatBusy"] = bool(doc.get("gateChatBusy") and doc.get("gateChatUntil", datetime.min.replace(tzinfo=timezone.utc)) > datetime.now(timezone.utc))
         data["availableActions"] = available_actions(doc["status"], failure.get("phase"))
         return cls.model_validate(data)
 
 
-class TaskSummary(ResponseModel):
+class TaskSummary(PublicTaskModel):
     id: str
     status: TaskStatus
     stage: TaskStage
@@ -199,6 +207,6 @@ class TaskSummary(ResponseModel):
         return cls.model_validate(doc)
 
 
-class TaskListResponse(ResponseModel):
+class TaskListResponse(PublicTaskModel):
     items: list[TaskSummary]
     next_cursor: str | None = None

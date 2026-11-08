@@ -11,6 +11,9 @@ from typing import Any
 from app.core.config import Settings
 from app.core.errors import invalid_state
 from app.core.redaction import redact
+from app.core.errors import safe_message
+from app.services.outcomes import outcome_payload, outcome_for
+import logging
 from app.schemas.enums import (
     ApprovalState,
     ArtifactType,
@@ -90,6 +93,14 @@ class WorkerService:
                 raise ExecutionLimit(FailureCode.TIMEOUT)
         return ctx
 
+    def lease_diagnostics(self, task_id, failure_count=0):
+        try:
+            task = self.store.get(f"tasks/{task_id}") or {}
+        except Exception:
+            task = {}  # logging must never interrupt lease enforcement
+        return {"task_id": task_id, "lease_expiry": str(task.get("leaseExpiresAt")),
+                "last_heartbeat": str(task.get("heartbeatAt")), "failure_count": failure_count}
+
     def _lease_updates(self, now: datetime, worker_id: str) -> dict[str, Any]:
         return {
             "leaseOwner": worker_id,
@@ -128,7 +139,7 @@ class WorkerService:
             # Inconsistent dispatch marker: drop it rather than run the wrong phase.
             apply_change(txn, ctx, self.settings, now, updates={"dispatchPending": False})
             return None
-        updates = {"dispatchPending": False, **self._lease_updates(now, worker_id)}
+        updates = {"dispatchPending": False, "outcome": None, **self._lease_updates(now, worker_id)}
         if phase == DispatchPhase.PLAN:
             updates["startedAt"] = now
             new = apply_change(
@@ -151,18 +162,79 @@ class WorkerService:
             ctx = self._owned(txn, task_id, worker_id, stopping=True)
             if ctx.task.get("deadlineAt") and now >= ctx.task["deadlineAt"]:
                 raise ExecutionLimit(FailureCode.TIMEOUT)
-            txn.update(f"tasks/{task_id}", self._lease_updates(now, worker_id))
+            # Coalesce rapid checkpoints, never extend a lease only in memory.
+            # Every persisted extension is durable before the caller proceeds.
+            last = ctx.task.get("heartbeatAt")
+            elapsed = (now - last).total_seconds() if last else float("inf")
+            if elapsed >= min(self.settings.heartbeat_seconds, self.settings.lease_seconds / 3):
+                txn.update(f"tasks/{task_id}", self._lease_updates(now, worker_id))
             return bool(ctx.task.get("cancelRequested"))
 
         return self.store.run_transaction(fn)
 
     # --- Progress -----------------------------------------------------------------------
     def record_sandbox(self, task_id, worker_id, receipt):
-        """Only the trusted execution bridge records actual Docker evidence."""
+        """Only the trusted execution bridge records actual Docker evidence.
+
+        Idempotent per (baseSha, diffHash) and fenced by active lease ownership.
+        """
         def fn(txn):
-            self._owned(txn, task_id, worker_id)
-            txn.update(f"tasks/{task_id}", {"sandboxVerification": receipt})
-        self.store.run_transaction(fn)
+            ctx = self._owned(txn, task_id, worker_id)
+            existing = ctx.task.get("sandboxVerification")
+            new_receipt = dict(receipt)
+            base_sha = str(new_receipt.get("baseSha") or "")
+            diff_hash = str(new_receipt.get("diffHash") or "")
+            if base_sha and diff_hash and not new_receipt.get("receiptId"):
+                new_receipt["receiptId"] = (
+                    "rcpt_" + sha256_hash(f"{base_sha}:{diff_hash}").removeprefix("sha256:")[:16]
+                )
+            if isinstance(new_receipt.get("staticOracleReceipt"), dict):
+                sor = dict(new_receipt["staticOracleReceipt"])
+                if sor.get("baseSha") and sor["baseSha"] != base_sha:
+                    raise ValueError("staticOracleReceipt baseSha must match parent receipt.")
+                if sor.get("diffHash") and sor["diffHash"] != diff_hash:
+                    raise ValueError("staticOracleReceipt diffHash must match parent receipt.")
+                sor.setdefault("receiptId", new_receipt.get("receiptId", ""))
+                new_receipt["staticOracleReceipt"] = sor
+
+            if (
+                isinstance(existing, dict)
+                and existing.get("source") == "docker"
+                and existing.get("passed") is True
+                and new_receipt.get("passed") is True
+                and existing.get("baseSha") == base_sha
+                and existing.get("diffHash") == diff_hash
+            ):
+                if existing.get("receiptId"):
+                    new_receipt["receiptId"] = existing["receiptId"]
+                if existing.get("executionId"):
+                    new_receipt["executionId"] = existing["executionId"]
+                if isinstance(existing.get("staticOracleReceipt"), dict) and isinstance(
+                    new_receipt.get("staticOracleReceipt"), dict
+                ):
+                    esor = existing["staticOracleReceipt"]
+                    if esor.get("verified") is True and esor.get("diffHash") == diff_hash:
+                        new_receipt["staticOracleReceipt"] = dict(esor)
+                txn.update(f"tasks/{task_id}", {"sandboxVerification": new_receipt})
+                return new_receipt
+
+            txn.update(f"tasks/{task_id}", {"sandboxVerification": new_receipt})
+            return new_receipt
+
+        return self.store.run_transaction(fn)
+
+    def record_lane_state(self, task_id: str, worker_id: str, lane_state: dict[str, Any]) -> dict[str, Any]:
+        """Persist compact lane decisions, escalations, and oracle summary under lease fencing."""
+        def fn(txn: Txn) -> dict[str, Any]:
+            ctx = self._owned(txn, task_id, worker_id)
+            prev = ctx.task.get("laneState") or {}
+            if prev.get("lane") == "full" and lane_state.get("lane") == "fast":
+                raise ValueError("Monotonic lane invariant violated: cannot transition full -> fast.")
+            clean = dict(lane_state)
+            txn.update(f"tasks/{task_id}", {"laneState": clean})
+            return clean
+
+        return self.store.run_transaction(fn)
 
     def update_progress(
         self,
@@ -220,7 +292,7 @@ class WorkerService:
         self, task: Doc, artifact_id: str, type_: ArtifactType, content: str,
         attempt: int | None, now: datetime,
     ) -> Doc:
-        clean = redact(content)
+        clean = redact(content) if type_ in {ArtifactType.FINAL_DIFF, ArtifactType.ATTEMPT_DIFF} else safe_message(content)
         if type_ == ArtifactType.FINAL_DIFF and clean != content:
             raise ValueError("final_diff cannot be stored without changing its validated content.")
         raw = clean.encode()
@@ -309,10 +381,13 @@ class WorkerService:
                 if (receipt.get("source") != "docker" or receipt.get("passed") is not True
                         or receipt.get("diffHash") != sha256_hash(diff_doc["content"])
                         or receipt.get("baseSha") != ctx.task.get("baseSha")
-                        or type(receipt.get("testsRun")) is not int or receipt["testsRun"] <= 0):
+                        or (not ((verification or {}).get("lane") == "fast" and (verification or {}).get("verificationLevel") in {"V0", "V1"} and isinstance(receipt.get("staticOracleReceipt"), dict) and receipt["staticOracleReceipt"].get("verified") is True and receipt["staticOracleReceipt"].get("originalFailed") is True and receipt["staticOracleReceipt"].get("patchedPassed") is True and receipt["staticOracleReceipt"].get("baseSha") == ctx.task.get("baseSha") and receipt["staticOracleReceipt"].get("diffHash") == sha256_hash(diff_doc["content"])) and (type(receipt.get("testsRun")) is not int or receipt["testsRun"] <= 0))):
                     raise ExecutionLimit(FailureCode.POLICY_VIOLATION)
             txn.set(artifact_path(task_id, "final_diff"), diff_doc)
             txn.set(artifact_path(task_id, "final_tests"), tests_doc)
+            cp_path = f"tasks/{task_id}/checkpoints/execute"
+            if txn.get(cp_path) is not None:
+                txn.set(cp_path, {"threadId": f"{task_id}:execute", "hasCheckpoint": False, "completed": True})
             return apply_change(
                 txn, ctx, self.settings, now,
                 to_status=TaskStatus.AWAITING_APPROVAL,
@@ -321,7 +396,7 @@ class WorkerService:
                     "finalDiffHash": sha256_hash(diff_doc["content"]),
                     "finalDiffSummary": summary,
                     "verification": {key: (verification or {}).get(key) for key in
-                                     ("reproduced", "regressionPassed", "testsRun", "newFailures")},
+                                     ("reproduced", "regressionPassed", "testsRun", "newFailures", *tuple(k for k in ("lane", "verificationLevel", "oracle", "timing", "escalations") if k in (verification or {})))},
                     "approval": {"state": ApprovalState.PENDING.value, "by": None, "at": None, "diffHash": None},
                     "dispatchPhase": None,
                     **release_lease(),
@@ -355,14 +430,39 @@ class WorkerService:
     def fail(
         self, task_id: str, worker_id: str, code: FailureCode, message: str,
         phase: DispatchPhase, retryable: bool = True, plan: PlanData | None = None,
+        outcome: str | None = None, evidence=(), next_step: str = "",
     ) -> Doc:
         """Stop the task. The backend, not the agent, maps `code` to a status."""
+        message = safe_message(message, 500)
         now = self.clock()
         target = status_for_failure(code)
+        evidence = list(evidence) or [a["id"] for a in self.store.list_artifacts(task_id)]
 
         def fn(txn: Txn) -> Doc:
             ctx = self._owned(txn, task_id, worker_id, stopping=True)
+            kind = outcome or outcome_for(code)
+            if kind == "infra_retry" and code not in {
+                FailureCode.INTERNAL_ERROR, FailureCode.LLM_UNAVAILABLE,
+                FailureCode.SANDBOX_ERROR, FailureCode.GITHUB_RATE_LIMITED,
+                FailureCode.GITHUB_ERROR,
+            }:
+                kind = outcome_for(code)  # model output cannot retry policy/budget/access failures
+            retries = ctx.task.get("infraRetries", 0)
+            if kind == "infra_retry" and phase != DispatchPhase.PR and retries < 2 and not ctx.task.get("cancelRequested") and now < ctx.task["deadlineAt"]:
+                return apply_change(txn, ctx, self.settings, now,
+                    to_status=TaskStatus.QUEUED if phase == DispatchPhase.PLAN else TaskStatus.RUNNING,
+                    updates={"infraRetries": retries + 1, "dispatchPending": True,
+                             "dispatchPhase": phase.value, "failure": None,
+                             "outcome": outcome_payload(kind, code, message, evidence, next_step),
+                             **release_lease()},
+                    events=[EventSpec(EventType.INFO, "Temporary infrastructure failure; retry queued.")])
+            if kind == "infra_retry":
+                kind = "cannot_fix_with_report"
+                next_action = "Automatic retries ended. Review the incident reference and run again when infrastructure is available."
+            else:
+                next_action = next_step
             updates: dict[str, Any] = {
+                "outcome": outcome_payload(kind, code, message, evidence, next_action),
                 "failure": {
                     "code": code.value,
                     "message": redact(message, 500),
@@ -397,11 +497,18 @@ class WorkerService:
         return self.store.run_transaction(fn)
 
     # --- Reaper ---------------------------------------------------------------------------
+    def _has_resumable_checkpoint(self, txn: Txn, task_id: str, phase: str) -> bool:
+        cp_doc = txn.get(f"tasks/{task_id}/checkpoints/{phase}")
+        if isinstance(cp_doc, dict) and cp_doc.get("hasCheckpoint") and not cp_doc.get("deleted"):
+            return True
+        return False
+
     def reap_expired(self) -> list[str]:
-        """Mark tasks whose lease expired as `worker_lost` and free the user's slot."""
+        """Requeue expired execute leases with a valid checkpoint, or mark `worker_lost`."""
         now = self.clock()
         reaped: list[str] = []
         for candidate in self.store.list_expired_leases(now, 50):
+            logging.getLogger("gitresolve.worker").warning("expired lease observed", extra=self.lease_diagnostics(candidate["id"]))
             done = self.store.run_transaction(lambda txn, tid=candidate["id"]: self._reap(txn, tid, now))
             if done:
                 reaped.append(candidate["id"])
@@ -418,6 +525,50 @@ class WorkerService:
             apply_change(txn, ctx, self.settings, now, updates=release_lease())
             return False
         phase = _PHASE_FOR_STATUS[status]
+        max_crash_resumes = int((task.get("limits") or {}).get("maxCrashResumes", 2))
+        crash_resumes = int(task.get("crashResumes", 0))
+        has_cp = phase == DispatchPhase.EXECUTE and self._has_resumable_checkpoint(txn, task_id, phase.value)
+        can_resume = (
+            has_cp
+            and not task.get("cancelRequested")
+            and (not task.get("deadlineAt") or now < task["deadlineAt"])
+            and crash_resumes < max_crash_resumes
+        )
+        if can_resume:
+            apply_change(
+                txn, ctx, self.settings, now,
+                to_status=TaskStatus.RUNNING,
+                updates={
+                    "crashResumes": crash_resumes + 1,
+                    "dispatchPending": True,
+                    "dispatchPhase": phase.value,
+                    "failure": None,
+                    **release_lease(),
+                },
+                events=[
+                    EventSpec(
+                        EventType.INFO,
+                        "Worker lease expired; requeued to resume from the last verified checkpoint.",
+                        level=EventLevel.WARN,
+                        data={
+                            "kind": "crash_resume",
+                            "resumeCount": crash_resumes + 1,
+                            "phase": phase.value,
+                        },
+                    )
+                ],
+            )
+            return True
+
+        exhausted_updates: dict[str, Any] = {}
+        if has_cp and crash_resumes >= max_crash_resumes:
+            exhausted_updates["outcome"] = outcome_payload(
+                "cannot_fix_with_report",
+                FailureCode.WORKER_LOST,
+                "The worker stopped responding after automatic checkpoint resume attempts. Run the task again.",
+                [],
+                "Automatic checkpoint resumes ended. Review the incident reference and run the task again.",
+            )
         apply_change(
             txn, ctx, self.settings, now,
             to_status=TaskStatus.WORKER_LOST,
@@ -430,6 +581,7 @@ class WorkerService:
                 },
                 "dispatchPending": False,
                 "dispatchPhase": None,
+                **exhausted_updates,
                 **release_lease(),
             },
             events=[

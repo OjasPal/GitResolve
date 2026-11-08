@@ -1,0 +1,58 @@
+[
+  {
+    "mode": "development",
+    "route": "dashboard",
+    "pass": 1,
+    "http_ms": 1421.9914,
+    "status": 200
+  },
+  {
+    "mode": "development",
+    "route": "settings",
+    "pass": 1,
+    "http_ms": 1158.1092,
+    "status": 200
+  },
+  {
+    "mode": "development",
+    "route": "tasks",
+    "pass": 1,
+    "http_ms": 875.9966,
+    "status": 200
+  },
+  {
+    "mode": "development",
+    "route": "tasks/new",
+    "pass": 1,
+    "http_ms": 3011.3665,
+    "status": 200
+  },
+  {
+    "mode": "development",
+    "route": "dashboard",
+    "pass": 2,
+    "http_ms": 132.2826,
+    "status": 200
+  },
+  {
+    "mode": "development",
+    "route": "settings",
+    "pass": 2,
+    "http_ms": 92.0488,
+    "status": 200
+  },
+  {
+    "mode": "development",
+    "route": "tasks",
+    "pass": 2,
+    "http_ms": 147.7301,
+    "status": 200
+  },
+  {
+    "mode": "development",
+    "route": "tasks/new",
+    "pass": 2,
+    "http_ms": 118.9929,
+    "status": 200
+  }
+]
