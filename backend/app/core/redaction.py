@@ -11,7 +11,7 @@ _PATTERNS = [
     re.compile(r"\bsk-[A-Za-z0-9_\-]{20,}\b"),
     re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b"),
     re.compile(
-        r"(?i)\b(?:[a-z][a-z0-9]*_)*(api[_-]?key|secret|token|password|passwd)\b['\"]?\s*[:=]\s*['\"]?[^\s'\"]+"
+        r"(?i)\b(?:[a-z][a-z0-9]*_)*(api[_-]?key|secret|token|password|passwd)\b['\"]?[ \t]*[:=][ \t]*['\"]?[^\s'\"]+"
     ),
 ]
 # Host paths only: repository-relative diagnostics remain intact.

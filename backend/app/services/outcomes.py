@@ -25,7 +25,6 @@ def outcome_for(code):
     return {
         "access_revoked": "needs_user_action", "issue_ambiguous": "needs_clarification",
         "not_reproduced": "cannot_reproduce", "policy_violation": "out_of_scope",
-        "llm_unavailable": "infra_retry",
     }.get(str(code), "cannot_fix_with_report")
 
 

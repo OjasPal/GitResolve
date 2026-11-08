@@ -435,19 +435,44 @@ def test_nexusmind_mixed_groq_api_key_never_short_circuits_and_attaches_setup_no
     task = FakeTask("Return 401 when GROQ_API_KEY is missing", nexusmind_issue_body)
     result = run_repair(task, ctx, router=router)
 
-    assert result.outcome == "fix_ready"
+    assert result.outcome == "resolved_with_guidance"
     assert result.summary is not None
     assert result.summary.get("resolutionKind") == "mixed"
     assert "GROQ_API_KEY" in result.summary.get("setupNote", "")
     assert result.summary.get("setupNoteHash") == sha256_hash(result.summary["setupNote"])
-    assert result.summary.get("placeholderEnv") == ["GROQ_API_KEY"]
-    # Verify placeholder_env was passed into sandbox execute calls
-    assert all(call["placeholder_env"] == {"GROQ_API_KEY": "gitresolve-placeholder-groq_api_key"} for call in ctx.calls)
+    # Workflow stops immediately at external guidance without running sandbox execute calls
+    assert len(ctx.calls) == 0
 
     # Verify approval + PR body includes "## Setup you must do" and enforces setupNoteHash
     from app.agent.repair_runner import compile_edits
+    from app.services.publication_patch import publication_patch
 
     compiled_proposal = compile_edits(proposal, originals)
+    pub_diff = publication_patch(compiled_proposal.final_diff)
+    fix_ready_result = ExecuteResult(
+        "fix_ready",
+        final_diff=pub_diff,
+        final_tests="PASSED",
+        summary={
+            "filesChanged": 1,
+            "linesAdded": 2,
+            "linesRemoved": 2,
+            "commitMessage": "fix: return 401 when GROQ_API_KEY is missing",
+            "branchName": "fix-groq-auth-status",
+            "setupNote": result.summary["setupNote"],
+            "setupNoteHash": result.summary["setupNoteHash"],
+            "resolutionKind": "mixed",
+        },
+        verification={
+            "reproduced": True,
+            "regressionPassed": True,
+            "testsRun": 2,
+            "newFailures": [],
+            "setupNote": result.summary["setupNote"],
+            "setupNoteHash": result.summary["setupNoteHash"],
+            "resolutionKind": "mixed",
+        },
+    )
 
     class MixedRunner:
         def plan(self, _t: Any, _c: Any) -> PlanResult:
@@ -465,12 +490,12 @@ def test_nexusmind_mixed_groq_api_key_never_short_circuits_and_attaches_setup_no
                         "passed": True,
                         "testsRun": 2,
                         "baseSha": "a" * 40,
-                        "diffHash": sha256_hash(result.final_diff or ""),
+                        "diffHash": sha256_hash(pub_diff),
                         "verificationPatch": compiled_proposal.final_diff,
                     },
                 },
             )
-            return result
+            return fix_ready_result
 
     store, tasks, worker_service, worker, github = _stack(MixedRunner())
     tasks.upsert_user("1", "dev")
@@ -1097,10 +1122,11 @@ def test_code_fix_with_explicit_credential_promoted_to_mixed_and_preexisting_bas
     )
     task = FakeTask(issue_title, issue_body)
     res = run_repair(task, ctx, router=router)
-    assert res.outcome == "fix_ready"
+    assert res.outcome == "resolved_with_guidance"
     assert res.summary is not None
     assert res.summary.get("resolutionKind") == "mixed"
     assert "https://console.groq.com/keys" in str(res.summary.get("setupNote") or "")
+    assert len(ctx.calls) == 0
 
 
 

@@ -183,6 +183,31 @@ class Worker:
                                                       "GitHub operation failed.", job.phase))
                 return
             log.exception("job failed", extra={"task_id": job.task_id})
+            if job.phase == DispatchPhase.EXECUTE:
+                existing_doc = self.service.store.get(f"tasks/{job.task_id}") or {}
+                existing_summary = existing_doc.get("finalDiffSummary") or {}
+                if existing_summary.get("setupNote") and existing_summary.get("envVars"):
+                    from app.agent.lanes.external_guidance import build_curated_guidance_outcome
+
+                    g_outcome = build_curated_guidance_outcome(
+                        reason_code="external_secret_missing",
+                        provider_key=str(existing_summary.get("providerKey") or "generic"),
+                        env_vars=tuple(str(x) for x in (existing_summary.get("envVars") or []) if x),
+                        selected_items=(),
+                    )
+                    if existing_summary.get("whatWeFound"):
+                        g_outcome["whatWeFound"] = list(existing_summary["whatWeFound"])
+                        g_outcome["evidence"] = list(existing_summary["whatWeFound"])
+                    self._safely(
+                        lambda: self.service.complete_guidance(
+                            job.task_id,
+                            self.worker_id,
+                            g_outcome,
+                            summary=existing_summary,
+                            verification=existing_doc.get("verification") or {},
+                        )
+                    )
+                    return
             message = public_error(exc).message
             self._safely(
                 lambda: self.service.fail(

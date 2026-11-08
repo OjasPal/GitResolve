@@ -416,7 +416,7 @@ function TaskWorkspaceContent() {
         )}
 
         {/* Mixed Resolution Setup Note if applicable */}
-        {(task.finalDiffSummary?.setupNote || (typeof task.verification?.setupNote === "string" && task.verification.setupNote)) && (
+        {task.status !== "resolved_with_guidance" && (task.finalDiffSummary?.setupNote || (typeof task.verification?.setupNote === "string" && task.verification.setupNote)) && (
           <div className="p-3.5 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 text-xs space-y-2" role="note">
             <div className="flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 shrink-0 text-neutral-700 dark:text-neutral-200" />

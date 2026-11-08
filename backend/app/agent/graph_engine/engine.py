@@ -1418,8 +1418,15 @@ def run_repair_graph(
         res = _guidance_execute_result(
             g_outcome,
             lane=lane_str,
-            resolution_kind="external_action",
+            resolution_kind=(
+                assessment.kind
+                if assessment.kind in {"external_action", "mixed"}
+                else "external_action"
+            ),
             final_tests_text=transcript,
+            setup_note=assessment.setup_note,
+            setup_note_hash=assessment.setup_note_hash,
+            setup_what_we_found=assessment.what_we_found,
         )
         return {
             "budgets": budgets,
@@ -4358,7 +4365,13 @@ Return QualityReview."""
             if s.get("terminal_outcome")
             else (
                 "finalize_guidance"
-                if (s.get("resolution_assessment") or {}).get("kind") == "external_action"
+                if (
+                    (s.get("resolution_assessment") or {}).get("kind") == "external_action"
+                    or (
+                        (s.get("resolution_assessment") or {}).get("kind") == "mixed"
+                        and bool((s.get("resolution_assessment") or {}).get("envVars"))
+                    )
+                )
                 else "env_prepare"
             )
         ),
