@@ -16,7 +16,9 @@ def key_for(request, scope, environment_hash, image_digest):
         return None
     fields = request.model_dump(exclude={'execution_id', 'timeout_seconds'})
     fields.update(scope=scope, environment_hash=environment_hash,
-                  image_digest=image_digest, verifier='baseline-v1')
+                  image_digest=image_digest,
+                  placeholder_env_keys=sorted((getattr(request, 'placeholder_env', None) or {}).keys()),
+                  verifier='baseline-v1')
     return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
 
 

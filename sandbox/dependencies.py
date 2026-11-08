@@ -72,12 +72,54 @@ def declared_requirements(root, profile):
         for group in ("test", "tests"):
             specs.extend(str(requirement(v)) for v in meta.get("optional-dependencies", {}).get(group, []))
         visited.add(project)
+    if not specs and getattr(profile, "dependency_files", None):
+        for rel_dep in sorted(profile.dependency_files):
+            dep_name = Path(rel_dep).name
+            if dep_name in {"requirements.txt", "requirements-test.txt", "requirements-tests.txt"}:
+                sub_req = root / rel_dep
+                if sub_req.exists():
+                    read_file(sub_req)
     if not specs and any(Path(n).name in {"setup.py", "setup.cfg", "Pipfile", "Pipfile.lock", "poetry.lock"} for n in profile.dependency_files):
         raise DependencyError("This dependency format requires a static requirements export; repository build scripts will not run.")
+    canon_names = {canonicalize_name(requirement(s).name) for s in specs}
+    auto_extras: list[str] = []
+    if "pydantic" in canon_names and "email-validator" not in canon_names:
+        uses_email = getattr(profile, "uses_pydantic_email", False)
+        if not uses_email:
+            for py_file in root.rglob("*.py"):
+                try:
+                    rel_parts = py_file.relative_to(root).parts
+                except ValueError:
+                    continue
+                if any(p in {".git", ".venv", "venv", "node_modules", "__pycache__"} for p in rel_parts) or py_file.is_symlink():
+                    continue
+                try:
+                    txt = py_file.read_text(encoding="utf-8", errors="ignore")
+                except OSError:
+                    continue
+                if "EmailStr" in txt or "NameEmail" in txt or "email_validator" in txt:
+                    uses_email = True
+                    break
+        if uses_email:
+            req_str = str(requirement("email-validator>=2.0.0"))
+            specs.append(req_str)
+            auto_extras.append(req_str)
+    if "passlib" in canon_names:
+        has_bcrypt_pin = any(
+            canonicalize_name(requirement(s).name) == "bcrypt" and bool(requirement(s).specifier)
+            for s in specs
+        )
+        if not has_bcrypt_pin:
+            specs = [s for s in specs if canonicalize_name(requirement(s).name) != "bcrypt"]
+            req_str = str(requirement("bcrypt==4.0.1"))
+            specs.append(req_str)
+            auto_extras.append(req_str)
     digest = hashlib.sha256()
     for name in sorted(set(profile.dependency_files) | {p.relative_to(root).as_posix() for p in visited}):
         path = root / name
         digest.update(name.encode() + b"\0" + path.read_bytes() + b"\0")
+    for extra_spec in sorted(auto_extras):
+        digest.update(f"__auto_extra__:{extra_spec}\0".encode())
     return sorted(set(specs)), digest.hexdigest()
 
 

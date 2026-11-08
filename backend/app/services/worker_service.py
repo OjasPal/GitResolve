@@ -10,7 +10,7 @@ from typing import Any
 
 from app.core.config import Settings
 from app.core.errors import invalid_state
-from app.core.redaction import redact
+from app.core.redaction import redact, redact_value
 from app.core.errors import safe_message
 from app.services.outcomes import outcome_payload, outcome_for
 import logging
@@ -54,7 +54,16 @@ class ExecutionLimit(Exception):
         super().__init__(code.value)
 
 # Structured fields a worker may set through `update_progress`.
-PROGRESS_FIELDS = frozenset({"baseSha", "testCommand", "baseline", "reproduction", "cleanupScope"})
+PROGRESS_FIELDS = frozenset({
+    "baseSha",
+    "testCommand",
+    "baseline",
+    "reproduction",
+    "cleanupScope",
+    "finalDiffSummary",
+    "verification",
+    "result",
+})
 _PHASE_FOR_STATUS = {
     TaskStatus.PLANNING: DispatchPhase.PLAN,
     TaskStatus.RUNNING: DispatchPhase.EXECUTE,
@@ -388,20 +397,102 @@ class WorkerService:
             cp_path = f"tasks/{task_id}/checkpoints/execute"
             if txn.get(cp_path) is not None:
                 txn.set(cp_path, {"threadId": f"{task_id}:execute", "hasCheckpoint": False, "completed": True})
+            clean_summary = dict(summary or {})
+            setup_note_hash = None
+            if clean_summary.get("setupNote"):
+                note_text = redact(str(clean_summary["setupNote"]), 600).strip()[:600]
+                setup_note_hash = sha256_hash(note_text)
+                clean_summary["setupNote"] = note_text
+                clean_summary["setupNoteHash"] = setup_note_hash
+            ver_dict = dict(verification or {})
+            if setup_note_hash:
+                ver_dict["setupNote"] = clean_summary["setupNote"]
+                ver_dict["setupNoteHash"] = setup_note_hash
             return apply_change(
                 txn, ctx, self.settings, now,
                 to_status=TaskStatus.AWAITING_APPROVAL,
                 stage=TaskStage.AWAITING_APPROVAL,
                 updates={
                     "finalDiffHash": sha256_hash(diff_doc["content"]),
-                    "finalDiffSummary": summary,
-                    "verification": {key: (verification or {}).get(key) for key in
-                                     ("reproduced", "regressionPassed", "testsRun", "newFailures", *tuple(k for k in ("lane", "verificationLevel", "oracle", "timing", "escalations") if k in (verification or {})))},
-                    "approval": {"state": ApprovalState.PENDING.value, "by": None, "at": None, "diffHash": None},
+                    "finalDiffSummary": clean_summary,
+                    "verification": {key: ver_dict.get(key) for key in
+                                     ("reproduced", "regressionPassed", "testsRun", "newFailures", *tuple(k for k in ("lane", "verificationLevel", "oracle", "timing", "escalations", "taskType", "approvedDependencyChanges", "touchedSymbolsCovered", "configProfileValidated", "v2Selection", "placeholderEnv", "setupNote", "setupNoteHash", "resolutionKind") if k in ver_dict))},
+                    "approval": {"state": ApprovalState.PENDING.value, "by": None, "at": None, "diffHash": None, "setupNoteHash": None},
                     "dispatchPhase": None,
                     **release_lease(),
                 },
                 events=[EventSpec(EventType.INFO, "Validated fix ready for review.")],
+            )
+
+        return self.store.run_transaction(fn)
+
+    def complete_guidance(
+        self,
+        task_id: str,
+        worker_id: str,
+        guidance_outcome: dict[str, Any],
+        summary: dict[str, Any] | None = None,
+        verification: dict[str, Any] | None = None,
+        final_tests: str = "",
+    ) -> Doc:
+        """Complete a task with external-action setup guidance (`resolved_with_guidance`).
+
+        Terminal non-failure state: no PR is opened, no failure object is stored,
+        and the user's active-task slot is released under lease fencing.
+        """
+        now = self.clock()
+
+        def fn(txn: Txn) -> Doc:
+            ctx = self._owned(txn, task_id, worker_id)
+            if final_tests:
+                tests_doc = self._artifact_doc(
+                    ctx.task, "final_tests", ArtifactType.FINAL_TESTS, final_tests, None, now
+                )
+                txn.set(artifact_path(task_id, "final_tests"), tests_doc)
+            cp_path = f"tasks/{task_id}/checkpoints/execute"
+            if txn.get(cp_path) is not None:
+                txn.set(cp_path, {"threadId": f"{task_id}:execute", "hasCheckpoint": False, "completed": True})
+            clean_outcome = redact_value(dict(guidance_outcome or {}))
+            clean_outcome.setdefault("kind", "needs_user_action")
+            clean_outcome.setdefault("reasonCode", "external_secret_missing")
+            title_msg = str(clean_outcome.get("title") or "External setup steps ready.")[:200]
+            clean_outcome.setdefault("explanation", str(clean_outcome.get("summary") or title_msg))
+            clean_outcome.setdefault("nextStep", str(clean_outcome.get("afterYouDoThis") or "Complete the setup steps above."))
+            updates: dict[str, Any] = {
+                "outcome": clean_outcome,
+                "failure": None,
+                "result": {
+                    **clean_outcome,
+                    "outcome": "resolved_with_guidance",
+                    "reasonCode": clean_outcome.get("reasonCode", "external_secret_missing"),
+                },
+                "dispatchPhase": None,
+                **release_lease(),
+            }
+            prev_summary = dict(ctx.task.get("finalDiffSummary") or {})
+            prev_ver = dict(ctx.task.get("verification") or {})
+            if summary is not None:
+                merged_summary = dict(summary)
+                for k in ("setupNote", "setupNoteHash", "setupWhatWeFound"):
+                    if prev_summary.get(k) and not merged_summary.get(k):
+                        merged_summary[k] = prev_summary[k]
+                if prev_summary.get("whatWeFound") and not merged_summary.get("setupWhatWeFound"):
+                    merged_summary["setupWhatWeFound"] = prev_summary["whatWeFound"]
+                updates["finalDiffSummary"] = redact_value(merged_summary)
+            if verification is not None:
+                merged_ver = dict(verification)
+                for k in ("setupNote", "setupNoteHash"):
+                    if prev_ver.get(k) and not merged_ver.get(k):
+                        merged_ver[k] = prev_ver[k]
+                updates["verification"] = redact_value(merged_ver)
+            return apply_change(
+                txn,
+                ctx,
+                self.settings,
+                now,
+                to_status=TaskStatus.RESOLVED_WITH_GUIDANCE,
+                updates=updates,
+                events=[EventSpec(EventType.INFO, title_msg, level=EventLevel.INFO)],
             )
 
         return self.store.run_transaction(fn)

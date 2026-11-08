@@ -35,6 +35,59 @@ def max_risk(a: RiskFloor, b: RiskFloor) -> RiskFloor:
     return a if RISK_ORDER[a] >= RISK_ORDER[b] else b
 
 
+class TaskType(str, Enum):
+    BUG = "bug"
+    REFACTOR = "refactor"
+    CONFIG = "config"
+    FEATURE = "feature"
+    UNCLEAR = "unclear"
+
+
+TASK_TYPE_CAUTION_ORDER: dict[TaskType, int] = {
+    TaskType.BUG: 0,
+    TaskType.REFACTOR: 1,
+    TaskType.CONFIG: 2,
+    TaskType.FEATURE: 3,
+    TaskType.UNCLEAR: 4,
+}
+
+
+def _coerce_task_type(value: TaskType | str | None, default: TaskType = TaskType.BUG) -> TaskType:
+    if isinstance(value, TaskType):
+        return value
+    if isinstance(value, str):
+        val = value.strip().lower()
+        for member in TaskType:
+            if member.value == val:
+                return member
+    return default
+
+
+def refine_task_type(
+    deterministic: TaskType | str,
+    llm_proposed: TaskType | str | None = None,
+) -> TaskType:
+    """Refine deterministic task_type with an LLM classification ONLY toward more caution.
+
+    - The fast lane is strictly bug-only (`TaskType.BUG`).
+    - An LLM classification may move `bug -> refactor | config | feature | unclear`,
+      or move any task to `unclear`.
+    - An LLM classification can NEVER move `feature | refactor | config | unclear -> bug`,
+      and can never lower the caution floor.
+    """
+    det = _coerce_task_type(deterministic, TaskType.BUG)
+    if llm_proposed is None or str(llm_proposed).strip() == "":
+        return det
+    llm = _coerce_task_type(llm_proposed, det)
+    if det == TaskType.UNCLEAR or llm == TaskType.UNCLEAR:
+        return TaskType.UNCLEAR
+    if det != TaskType.BUG:
+        # Non-bug deterministic classification is sticky against downgrade to bug
+        return det
+    # det is BUG: allow LLM to raise caution to REFACTOR / CONFIG / FEATURE / UNCLEAR
+    return llm if TASK_TYPE_CAUTION_ORDER[llm] > TASK_TYPE_CAUTION_ORDER[det] else det
+
+
 class ChangeClass(str, Enum):
     MISSING_IMPORT = "missing_import"
     UNUSED_IMPORT_REMOVAL = "unused_import_removal"
@@ -62,7 +115,7 @@ class EscalationReason(str, Enum):
 
 FAST_MAX_PROVIDER_CALLS = 3
 FAST_SUB_DEADLINE_SECONDS = 120.0
-LANES_POLICY_VERSION = "al.v1"
+LANES_POLICY_VERSION = "al.v2"
 
 
 @dataclass(frozen=True)
@@ -75,6 +128,8 @@ class TriageReport:
     signals: tuple[str, ...] = ()
     override_reasons: tuple[str, ...] = ()
     uncertain_localization: bool = False
+    task_type_candidate: TaskType = TaskType.BUG
+    task_type_floor: TaskType = TaskType.BUG
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -90,10 +145,14 @@ class TriageReport:
             "signals": list(self.signals[:15]),
             "overrideReasons": list(self.override_reasons[:15]),
             "uncertainLocalization": self.uncertain_localization,
+            "taskTypeCandidate": self.task_type_candidate.value,
+            "taskTypeFloor": self.task_type_floor.value,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> TriageReport:
+        cand_type = _coerce_task_type(data.get("taskTypeCandidate"), TaskType.BUG)
+        floor_type = refine_task_type(cand_type, data.get("taskTypeFloor"))
         return cls(
             candidate_lane=LaneName(data.get("candidateLane", LaneName.FULL.value)),
             risk_floor=RiskFloor(data.get("riskFloor", RiskFloor.HIGH.value)),
@@ -109,6 +168,8 @@ class TriageReport:
             signals=tuple(str(x) for x in (data.get("signals") or ())),
             override_reasons=tuple(str(x) for x in (data.get("overrideReasons") or ())),
             uncertain_localization=bool(data.get("uncertainLocalization", False)),
+            task_type_candidate=cand_type,
+            task_type_floor=floor_type,
         )
 
 
@@ -127,6 +188,8 @@ class PatchFacts:
     changed_exports: tuple[str, ...] = ()
     override_reasons: tuple[str, ...] = ()
     non_import_ast_unchanged: bool = False
+    new_public_symbols: tuple[str, ...] = ()
+    approved_dependency_files: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -143,6 +206,8 @@ class PatchFacts:
             "changedExports": list(self.changed_exports[:15]),
             "overrideReasons": list(self.override_reasons[:15]),
             "nonImportAstUnchanged": self.non_import_ast_unchanged,
+            "newPublicSymbols": list(self.new_public_symbols[:15]),
+            "approvedDependencyFiles": list(self.approved_dependency_files[:10]),
         }
 
     @classmethod
@@ -161,6 +226,8 @@ class PatchFacts:
             changed_exports=tuple(str(x) for x in (data.get("changedExports") or ())),
             override_reasons=tuple(str(x) for x in (data.get("overrideReasons") or ())),
             non_import_ast_unchanged=bool(data.get("nonImportAstUnchanged", False)),
+            new_public_symbols=tuple(str(x) for x in (data.get("newPublicSymbols") or ())),
+            approved_dependency_files=tuple(str(x) for x in (data.get("approvedDependencyFiles") or ())),
         )
 
 

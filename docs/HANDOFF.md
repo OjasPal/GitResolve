@@ -1,32 +1,20 @@
-# Frontend UI fixes handoff
+# Handoff — 2026-11-08 — Main Merge (Frontend UI Fixes + Agent Workflow Optimization through Phase 4 & EAG)
 
-## Branch and working state
-- Current checkout C:/Users/Ojas Pal/GitResolve is on frontend/ui-fixes at faa0c7c.
-- Earlier isolated worktree was removed by the user.
-- Earlier frontend milestone and both imported main authorization commits are committed.
-- Current changes remain uncommitted.
-- Removed the private-repository documentation link from shared LegalPage, covering Privacy, Terms and Your data.
-- Removed the duplicate permission grid from Settings GitHub access.
-- Removed the display-name helper sentence, enlarged its label and refined the input using existing theme tokens.
-- Save appears only for a changed name, disables during saving/empty input, and disappears after a successful save.
-- No new dependencies or backend changes in this turn.
+## Branch and commits
+- Branch: `main` (merged `frontend/ui-fixes` and `agent/workflow-optimization`).
+- Included milestones: Phase 0 `21232ed`, Phase 1 `dfe0c8c`, speed `18c6da9`, AL `9834328`, Phase 2A `9313144`, Phase 2B `42cb81f`, Phase 3 `6d02f65`, Phase 4 `f7d8639`, EAG `e6d925b`–`7727b08`, and frontend UI fixes `13a551a`.
 
-## Validation
-- Hardened network-disabled read-only node:22-alpine containers, nonroot user, no credentials/socket.
-- node node_modules/typescript/bin/tsc --noEmit --incremental false -> passed.
-- node node_modules/eslint/bin/eslint.js src/app/settings/page.tsx src/components/LegalPage.tsx -> passed.
-- git diff --check -> passed.
-- Browser appearance and authenticated name saves were not live-tested.
-
-## Prior functionality
-- Help at /help shares the policy reading layout.
-- Footer begins Help, Privacy, Terms, Your data. GitHub follows FAQ in the header.
-- Approval chats have one Ask a question composer.
-- GitHub popup has two setup steps.
-- Delete history removes finished attempts from visible history using retention-preserving tombstones; active tasks stay visible.
-- Earlier history/API security/lifecycle checks passed 41 tests.
+## Working state and validation
+- Clean working tree on `main` ready for `git push origin main`.
+- Resolved merge conflicts between `frontend/ui-fixes` and `agent/workflow-optimization`:
+  - `backend/app/services/task_service.py`: preserved both `TERMINAL_STATUSES` (for `delete_history`) and `sha256_hash` (for EAG `setupNoteHash`).
+  - `docs/HANDOFF.md`: unified handoff status (under 40 lines per `AGENTS.md`).
+- Validation (0 live LLM tokens):
+  - `.venv/Scripts/python.exe -m pytest backend/tests/unit/test_external_guidance.py backend/tests/unit/test_phase_4.py backend/tests/integration/test_task_lifecycle.py -q --tb=short` -> passed.
 
 ## Remaining work
-- Browser review of the latest Settings refinements.
-- Verify Firebase display-name persistence after GitHub reauthentication.
-- Commit current edits when approved.
+- Phase 5: Live evaluation harness, benchmark suite, and end-to-end safety audit (deferred for future).
+
+## Gotchas
+- `build_placeholder_env` only populates credential env vars (`_is_credential_env_name`) and skips non-string `BaseSettings` fields (`_annotation_allows_string`).
+- `redaction.py` secret assignment regex uses horizontal whitespace (`[ \t]*[:=][ \t]*`) so multiline code diffs with `GROQ_API_KEY:` are never corrupted.

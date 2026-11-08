@@ -17,7 +17,7 @@ from app.schemas.enums import (
     TaskStatus,
 )
 from app.services.github import GitHubGateway, GitHubUnavailable, IssueInfo, RepositoryInfo
-from app.services.ids import task_id_for
+from app.services.ids import sha256_hash, task_id_for
 from app.services.lifecycle import PR_RETRY_STATUSES, TERMINAL_STATUSES, is_active
 from app.services.store.base import DELETE_FIELD, AlreadyExists, Doc, Store, Txn
 from app.services.transitions import (
@@ -381,6 +381,13 @@ class TaskService:
                 except ValueError:
                     raise invalid_state("The cleanup scope changed. Investigate the request again before approving.") from None
                 cleanup_updates={"cleanupScope":{**scope,"approved":True},"limits":{**ctx.task["limits"],"maxDiffLines":scope["maxDiffLines"]}}
+            elif isinstance(ctx.task.get("plan"), dict):
+                from app.services.policy import derive_limits, validate_plan_scope
+                try:
+                    validate_plan_scope(ctx.task["plan"], ctx.task["limits"])
+                except ValueError as exc:
+                    raise invalid_state(str(exc)) from None
+                cleanup_updates = {"limits": derive_limits(ctx.task["plan"], ctx.task["limits"])}
             return apply_change(
                 txn, ctx, self.settings, now,
                 to_status=TaskStatus.RUNNING,
@@ -455,6 +462,18 @@ class TaskService:
                     409, "diff_hash_mismatch",
                     "The diff changed since you reviewed it. Reload and review again.",
                 )
+            summary_doc = task.get("finalDiffSummary") or {}
+            setup_note = str(summary_doc.get("setupNote") or "").strip()
+            setup_note_hash = None
+            if setup_note:
+                if redact(setup_note) != setup_note or len(setup_note) > 600:
+                    raise invalid_state("The setup note contains invalid or sensitive data.")
+                setup_note_hash = sha256_hash(setup_note)
+                if summary_doc.get("setupNoteHash") and summary_doc["setupNoteHash"] != setup_note_hash:
+                    raise ApiError(
+                        409, "setup_note_mismatch",
+                        "The setup note changed since you reviewed it. Reload and review again.",
+                    )
             return apply_change(
                 txn, ctx, self.settings, now,
                 to_status=TaskStatus.CREATING_PR,
@@ -465,6 +484,7 @@ class TaskService:
                         "by": user_id,
                         "at": now,
                         "diffHash": diff_hash,
+                        "setupNoteHash": setup_note_hash,
                     },
                     "dispatchPending": True,
                     "dispatchPhase": DispatchPhase.PR.value,

@@ -150,8 +150,32 @@ class Worker:
         except PullRequestError as exc:
             self._safely(lambda: self.service.fail(job.task_id, self.worker_id, exc.code, exc.message, job.phase))
         except Exception as exc:
+            from agent.router import AllProvidersFailedError, ProviderError
             from app.services.github import GitHubUnavailable
             from githubapp.client import GitHubClientError
+            if isinstance(exc, (ProviderError, AllProvidersFailedError)):
+                if getattr(exc, "reason", None) == "quality":
+                    self._safely(
+                        lambda: self.service.fail(
+                            job.task_id,
+                            self.worker_id,
+                            FailureCode.NO_FIX_FOUND,
+                            "The revised approach still could not be verified. Failure history is saved; refine the request before another run.",
+                            job.phase,
+                        )
+                    )
+                else:
+                    self._safely(
+                        lambda: self.service.fail(
+                            job.task_id,
+                            self.worker_id,
+                            FailureCode.LLM_UNAVAILABLE,
+                            "Investigation temporarily paused. Your progress is saved. Try again once the model service is available.",
+                            job.phase,
+                            outcome="infra_retry",
+                        )
+                    )
+                return
             if isinstance(exc, (GitHubUnavailable, GitHubClientError)):
                 code = getattr(exc, "code", str(exc))
                 failure = FailureCode(code) if code in {c.value for c in FailureCode} else FailureCode.GITHUB_ERROR
@@ -159,6 +183,31 @@ class Worker:
                                                       "GitHub operation failed.", job.phase))
                 return
             log.exception("job failed", extra={"task_id": job.task_id})
+            if job.phase == DispatchPhase.EXECUTE:
+                existing_doc = self.service.store.get(f"tasks/{job.task_id}") or {}
+                existing_summary = existing_doc.get("finalDiffSummary") or {}
+                if existing_summary.get("setupNote") and existing_summary.get("envVars"):
+                    from app.agent.lanes.external_guidance import build_curated_guidance_outcome
+
+                    g_outcome = build_curated_guidance_outcome(
+                        reason_code="external_secret_missing",
+                        provider_key=str(existing_summary.get("providerKey") or "generic"),
+                        env_vars=tuple(str(x) for x in (existing_summary.get("envVars") or []) if x),
+                        selected_items=(),
+                    )
+                    if existing_summary.get("whatWeFound"):
+                        g_outcome["whatWeFound"] = list(existing_summary["whatWeFound"])
+                        g_outcome["evidence"] = list(existing_summary["whatWeFound"])
+                    self._safely(
+                        lambda: self.service.complete_guidance(
+                            job.task_id,
+                            self.worker_id,
+                            g_outcome,
+                            summary=existing_summary,
+                            verification=existing_doc.get("verification") or {},
+                        )
+                    )
+                    return
             message = public_error(exc).message
             self._safely(
                 lambda: self.service.fail(
@@ -220,6 +269,25 @@ class Worker:
             self.service.complete_execution(
                 job.task_id, self.worker_id, result.final_diff, result.final_tests, result.summary, result.verification
             )
+        elif result.outcome == "resolved_with_guidance":
+            guidance_outcome = (result.summary or {}).get("guidanceOutcome") or {
+                "kind": "needs_user_action",
+                "reasonCode": "external_secret_missing",
+                "title": result.failure_message or "External setup required",
+                "summary": result.failure_message or "Complete the external setup steps to resolve this issue.",
+                "whatWeFound": list(result.evidence or []),
+                "steps": [{"text": result.next_step or "Configure the required external setting in your environment."}],
+                "afterYouDoThis": result.next_step or "Re-check once the setting is active.",
+                "securityNote": "Never paste API keys or secrets into issues or chat.",
+            }
+            self.service.complete_guidance(
+                job.task_id,
+                self.worker_id,
+                guidance_outcome,
+                summary=result.summary,
+                verification=result.verification,
+                final_tests=result.final_tests,
+            )
         else:
             self.service.fail(
                 job.task_id, self.worker_id,
@@ -244,6 +312,17 @@ class Worker:
             or redact(artifact["content"]) != artifact["content"]
         ):
             raise PullRequestError(FailureCode.INTERNAL_ERROR, "Stored diff does not match the approved diff.")
+        summary_doc = task.get("finalDiffSummary") or {}
+        setup_note = str(summary_doc.get("setupNote") or "").strip()
+        if setup_note:
+            expected_setup_hash = approval.get("setupNoteHash") or summary_doc.get("setupNoteHash")
+            if (
+                not expected_setup_hash
+                or sha256_hash(setup_note) != expected_setup_hash
+                or redact(setup_note) != setup_note
+                or len(setup_note) > 600
+            ):
+                raise PullRequestError(FailureCode.INTERNAL_ERROR, "Stored setup note does not match the approved setup note.")
         self.service.heartbeat(job.task_id, self.worker_id)
         if self.github is not None:
             from agent.publication import build_publication_graph

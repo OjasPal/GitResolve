@@ -96,14 +96,34 @@ class LangGraphAgentRunner:
                 failure_code=FailureCode.LLM_UNAVAILABLE,
                 failure_message=result.get("error") or "Issue analysis failed.",
             )
+        from app.services.policy import validate_plan_scope
+        try:
+            validate_plan_scope(result, task.limits)
+        except ValueError as exc:
+            return PlanResult(
+                "out_of_scope",
+                failure_code=FailureCode.POLICY_VIOLATION,
+                failure_message=str(exc)[:400],
+            )
+        raw_task_type = str(result.get("task_type") or "bug").strip().lower()
+        if raw_task_type not in {"bug", "feature", "refactor", "config", "unclear"}:
+            raw_task_type = "bug"
+        needs_input = bool(result.get("needs_more_information")) or raw_task_type == "unclear"
         return PlanResult(
-            "needs_input" if result.get("needs_more_information") else "ready",
+            "needs_input" if needs_input else "ready",
             plan=PlanData(
                 title=result.get("task_title", ""),
                 problem_summary=result["problem_summary"],
                 steps=result["plan"],
                 likely_files=result.get("likely_files", []),
                 questions=result.get("questions_for_reporter", []),
+                task_type=raw_task_type,
+                spec=result.get("spec", "") or "",
+                acceptance_criteria=result.get("acceptance_criteria", []) or [],
+                expected_files=result.get("expected_files", []) or [],
+                line_budget=int(result.get("line_budget") or 120),
+                dependency_changes=result.get("dependency_changes", []) or [],
+                plan_hash=result.get("plan_hash", "") or "",
             ),
         )
 

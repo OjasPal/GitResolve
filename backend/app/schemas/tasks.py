@@ -92,6 +92,13 @@ class PlanData(PublicTaskModel):
     steps: list[str] = Field(min_length=1, max_length=10)
     likely_files: list[str] = Field(default_factory=list, max_length=20)
     questions: list[str] = Field(default_factory=list, max_length=10)
+    task_type: Literal["bug", "feature", "refactor", "config", "unclear"] = "bug"
+    spec: str = Field(default="", max_length=2000)
+    acceptance_criteria: list[str] = Field(default_factory=list, max_length=10)
+    expected_files: list[str] = Field(default_factory=list, max_length=20)
+    line_budget: int = Field(default=120, ge=1, le=1000)
+    dependency_changes: list[dict[str, Any]] = Field(default_factory=list, max_length=10)
+    plan_hash: str = Field(default="", max_length=128)
 
 
 class Attempts(PublicTaskModel):
@@ -127,6 +134,7 @@ class Approval(PublicTaskModel):
     by: str | None = None
     at: datetime | None = None
     diff_hash: str | None = None
+    setup_note_hash: str | None = None
 
 
 class PullRequestView(PublicTaskModel):
@@ -159,6 +167,7 @@ class TaskResponse(PublicTaskModel):
     limits: Limits
     final_diff_hash: str | None = None
     final_diff_summary: dict[str, Any] | None = None
+    verification: dict[str, Any] | None = None
     approval: Approval | None = None
     failure: Failure | None = None
     result: dict[str, Any] | None = None
@@ -183,7 +192,11 @@ class TaskResponse(PublicTaskModel):
         if data.get("failure"):
             data["failure"] = {**data["failure"], "message": safe_message(data["failure"]["message"], 500)}
         data["outcome"] = public_outcome(data)
-        data["userMessage"] = data["outcome"]["explanation"] if data["outcome"] else None
+        data["userMessage"] = (
+            (data["outcome"].get("explanation") or data["outcome"].get("summary"))
+            if isinstance(data.get("outcome"), dict)
+            else None
+        )
         data["gateChatBusy"] = bool(doc.get("gateChatBusy") and doc.get("gateChatUntil", datetime.min.replace(tzinfo=timezone.utc)) > datetime.now(timezone.utc))
         data["availableActions"] = available_actions(doc["status"], failure.get("phase"))
         return cls.model_validate(data)

@@ -23,6 +23,13 @@ class AgentState(TypedDict):
     plan: list[str]
     needs_more_information: bool
     questions_for_reporter: list[str]
+    task_type: NotRequired[str]
+    spec: NotRequired[str]
+    acceptance_criteria: NotRequired[list[str]]
+    expected_files: NotRequired[list[str]]
+    line_budget: NotRequired[int]
+    dependency_changes: NotRequired[list[dict[str, Any]]]
+    plan_hash: NotRequired[str]
 
     repair_attempts: int
     max_repair_attempts: int

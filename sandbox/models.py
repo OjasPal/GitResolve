@@ -1,8 +1,39 @@
 """Request/response models for the sandbox runner."""
 
+import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+_PLACEHOLDER_ENV_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
+_RESERVED_SANDBOX_ENV_KEYS = frozenset({
+    "PATH",
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "PYTHONSTARTUP",
+    "PYTHONWARNINGS",
+    "PYTHONDONTWRITEBYTECODE",
+    "PYTHONHASHSEED",
+    "HOME",
+    "USER",
+    "USERNAME",
+    "LOGNAME",
+    "SHELL",
+    "PWD",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "VIRTUAL_ENV",
+    "LD_LIBRARY_PATH",
+    "LD_PRELOAD",
+    "DYLD_LIBRARY_PATH",
+    "LANG",
+    "LC_ALL",
+    "ENVIRONMENT",
+    "ADAPTIVE_LANES",
+    "AGENT_ENGINE",
+    "EXTERNAL_GUIDANCE",
+})
 
 
 class ExecutionRequest(BaseModel):
@@ -24,6 +55,28 @@ class ExecutionRequest(BaseModel):
     require_ui_answers: bool = False
     allowed_deletions: list[str] = Field(default_factory=list, max_length=4)
     verify_cleanup: bool = False
+    placeholder_env: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("placeholder_env")
+    @classmethod
+    def _check_placeholder_env(cls, value: dict[str, str]) -> dict[str, str]:
+        if not value:
+            return {}
+        if len(value) > 32:
+            raise ValueError("Too many placeholder environment variables.")
+        cleaned: dict[str, str] = {}
+        for k, v in sorted(value.items()):
+            key = str(k).strip()
+            val = str(v)
+            if not _PLACEHOLDER_ENV_KEY_RE.match(key) or key in _RESERVED_SANDBOX_ENV_KEYS:
+                raise ValueError(f"Invalid or reserved placeholder env var name: {key!r}")
+            expected = f"gitresolve-placeholder-{key.lower()}"
+            if val != expected:
+                raise ValueError(
+                    f"Refusing non-placeholder environment value for {key!r}; real secrets are forbidden in the sandbox."
+                )
+            cleaned[key] = val
+        return cleaned
 
     @field_validator("ui_entrypoint")
     @classmethod

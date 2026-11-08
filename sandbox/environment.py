@@ -91,7 +91,10 @@ def download_wheels(specs, destination, deadline, cancel=None):
                 return
             args = [sys.executable, "-I", "-m", "pip", "--isolated", "--disable-pip-version-check",
                     "download", "--no-deps", "--only-binary=:all:", "--cache-dir", str(Path(tempfile.gettempdir()) / "gitresolve-pip-downloads"), "--no-input", "--keyring-provider", "disabled",
-                    "--index-url", "https://pypi.org/simple", "--platform", "manylinux2014_x86_64",
+                    "--index-url", "https://pypi.org/simple",
+                    "--platform", "manylinux2014_x86_64",
+                    "--platform", "manylinux_2_17_x86_64",
+                    "--platform", "manylinux_2_28_x86_64",
                     "--implementation", "cp", "--python-version", "3.12", "--abi", "cp312",
                     "--dest", temporary, *[str(r).split(";", 1)[0].strip() for r in active]]
             downloaded = capture(args, deadline, cancel, 16000, env=env)
@@ -99,7 +102,17 @@ def download_wheels(specs, destination, deadline, cancel=None):
                 text = (downloaded.stdout + downloaded.stderr).decode(errors="replace")
                 if any(word in text for word in ("ConnectionError", "ReadTimeout", "Temporary failure", "ProxyError")):
                     raise SandboxError("wheel_download_unavailable", "The public wheel index is temporarily unavailable.")
-                raise DependencyError("Compatible binary wheels could not be resolved. Source builds are disabled; provide wheel-supported versions.", "unsupported_dependency")
+                import re
+                pkg_match = re.search(
+                    r"(?:No matching distribution found for|Could not find a version that satisfies the requirement)\s+([A-Za-z0-9_.\-\[\]=<>!~]+)",
+                    text,
+                    re.IGNORECASE,
+                )
+                pkg_hint = f" ({pkg_match.group(1)})" if pkg_match else ""
+                raise DependencyError(
+                    f"Compatible binary wheels could not be resolved{pkg_hint}. Source builds are disabled; provide wheel-supported versions.",
+                    "unsupported_dependency",
+                )
             wheels = sorted(Path(temporary).glob("*.whl"))
             if sum(p.stat().st_size for p in wheels) > 512_000_000:
                 raise DependencyError("Wheelhouse exceeds the download size limit.", "unsupported_dependency")

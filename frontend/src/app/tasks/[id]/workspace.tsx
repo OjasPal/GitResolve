@@ -40,6 +40,48 @@ import {
   TestTube2,
   XCircle} from "lucide-react";
 
+const SAFE_GUIDANCE_URLS = new Set([
+  "https://console.groq.com/keys",
+  "https://aistudio.google.com/apikey",
+  "https://platform.openai.com/api-keys",
+  "https://console.anthropic.com/settings/keys",
+  "https://help.shopify.com/en/manual/orders/notifications/webhooks",
+  "https://help.shopify.com/en/manual/Fulfillment/setup/notifications/webhooks",
+  "https://dashboard.stripe.com/webhooks",
+  "https://github.com/settings/developers",
+  "https://console.aws.amazon.com/iam/",
+  "https://console.twilio.com/",
+  "https://app.sendgrid.com/settings/api_keys",
+  "https://api.slack.com/apps",
+  "https://app.pinecone.io/",
+  "https://supabase.com/dashboard",
+]);
+
+function renderTextWithSafeLinks(text: string) {
+  // Strip any accidental markdown link brackets [Label](https://...) into "Label: https://..."
+  const normalized = text.replace(/\[([^\]]+)\]\((https:\/\/[^\s)]+)\)/g, "$1: $2");
+  const parts = normalized.split(/(https:\/\/[^\s)]+)/g);
+  return parts.map((part, idx) => {
+    const cleanUrl = part.replace(/[.,;]+$/, "");
+    const trailing = part.slice(cleanUrl.length);
+    return SAFE_GUIDANCE_URLS.has(cleanUrl) ? (
+      <span key={idx}>
+        <a
+          href={cleanUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline underline-offset-2 font-medium"
+        >
+          {cleanUrl}
+        </a>
+        {trailing}
+      </span>
+    ) : (
+      <span key={idx}>{part}</span>
+    );
+  });
+}
+
 function TaskWorkspaceContent() {
   const routeParams = useParams();
   const taskId = (routeParams?.id as string) || "";
@@ -86,6 +128,8 @@ function TaskWorkspaceContent() {
       if (isInitial) {
         if (taskData.status === "awaiting_approval") {
           setActiveTab("diff");
+        } else if (taskData.status === "resolved_with_guidance") {
+          setActiveTab("investigation");
         } else if (taskData.status === "completed" && taskData.pr) {
           setActiveTab("pr");
         } else if (taskData.status === "awaiting_start") {
@@ -278,8 +322,135 @@ function TaskWorkspaceContent() {
           </div>
         </div>
 
+        {/* External-Action Guidance Card (Terminal Non-Failure) */}
+        {task.status === "resolved_with_guidance" && (
+          <div className="p-4 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 text-xs space-y-3" role="status">
+            <div className="flex items-start gap-2.5">
+              <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-neutral-700 dark:text-neutral-200" />
+              <div className="space-y-1 flex-1">
+                <p className="font-semibold text-sm text-neutral-900 dark:text-neutral-100">
+                  {typeof task.result?.title === "string" && task.result.title
+                    ? task.result.title
+                    : "External setup required"}
+                </p>
+                <p className="text-neutral-700 dark:text-neutral-300 leading-relaxed">
+                  {typeof task.result?.summary === "string" && task.result.summary
+                    ? task.result.summary
+                    : typeof task.result?.explanation === "string" && task.result.explanation
+                    ? task.result.explanation
+                    : "We checked your repository. No code change is needed — complete the external configuration steps below."}
+                </p>
+              </div>
+            </div>
+
+            {Array.isArray(task.result?.whatWeFound) && task.result.whatWeFound.length > 0 && (
+              <div className="space-y-1.5 pt-2 border-t border-neutral-200 dark:border-neutral-800">
+                <p className="font-semibold text-neutral-800 dark:text-neutral-200">
+                  What we found in your repository
+                </p>
+                <ul className="space-y-1 font-mono text-[11px] text-neutral-600 dark:text-neutral-400">
+                  {(task.result.whatWeFound as Array<string | { path?: string; line?: number; detail?: string }>).map((item, idx) => (
+                    <li key={idx} className="flex items-center gap-1.5">
+                      <FileCode className="w-3.5 h-3.5 shrink-0 text-neutral-400" />
+                      {typeof item === "string" ? (
+                        <span className="text-neutral-900 dark:text-neutral-100">{item}</span>
+                      ) : (
+                        <>
+                          <span className="text-neutral-900 dark:text-neutral-100">
+                            {item.path}{item.line ? `:${item.line}` : ""}
+                          </span>
+                          {item.detail && <span>— {item.detail}</span>}
+                        </>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {Array.isArray(task.result?.steps) && task.result.steps.length > 0 && (
+              <div className="space-y-1.5 pt-2 border-t border-neutral-200 dark:border-neutral-800">
+                <p className="font-semibold text-neutral-800 dark:text-neutral-200">
+                  Steps to complete setup
+                </p>
+                <ol className="list-decimal list-inside space-y-1.5 text-neutral-800 dark:text-neutral-200 leading-relaxed">
+                  {(task.result.steps as Array<string | { text?: string; link?: string }>).map((step, idx) => {
+                    const stepText = typeof step === "string" ? step : String(step?.text || "");
+                    const stepLink = typeof step === "object" && step !== null && typeof step.link === "string" && SAFE_GUIDANCE_URLS.has(step.link) ? step.link : null;
+                    return (
+                      <li key={idx}>
+                        {renderTextWithSafeLinks(stepText)}
+                        {stepLink && (
+                          <>
+                            {" "}
+                            <a
+                              href={stepLink}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="underline underline-offset-2 font-medium inline-flex items-center gap-1"
+                            >
+                              <span>{stepLink}</span>
+                              <ExternalLink className="w-3 h-3 inline" />
+                            </a>
+                          </>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ol>
+              </div>
+            )}
+
+            {typeof task.result?.afterYouDoThis === "string" && task.result.afterYouDoThis && (
+              <p className="text-neutral-600 dark:text-neutral-400 pt-1">
+                <strong>After you do this:</strong> {task.result.afterYouDoThis}
+              </p>
+            )}
+
+            <p className="text-[11px] text-neutral-500 pt-2 border-t border-neutral-200 dark:border-neutral-800">
+              {typeof task.result?.securityNote === "string" && task.result.securityNote
+                ? task.result.securityNote
+                : "Never commit secrets or .env to git. GitResolve never asks you to paste secret values into the app."}
+            </p>
+          </div>
+        )}
+
+        {/* Mixed Resolution Setup Note if applicable */}
+        {task.status !== "resolved_with_guidance" && (task.finalDiffSummary?.setupNote || (typeof task.verification?.setupNote === "string" && task.verification.setupNote)) && (
+          <div className="p-3.5 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 text-xs space-y-2" role="note">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-neutral-700 dark:text-neutral-200" />
+              <p className="font-semibold text-neutral-900 dark:text-neutral-100">
+                Setup you must do outside the codebase
+              </p>
+            </div>
+            {(() => {
+              const foundItems = (
+                Array.isArray(task.finalDiffSummary?.setupWhatWeFound)
+                  ? task.finalDiffSummary.setupWhatWeFound
+                  : Array.isArray(task.finalDiffSummary?.whatWeFound) && task.status !== "resolved_with_guidance"
+                  ? task.finalDiffSummary.whatWeFound
+                  : []
+              ) as string[];
+              return foundItems.length > 0 ? (
+                <div className="font-mono text-[11px] text-neutral-600 dark:text-neutral-400 space-y-0.5">
+                  {foundItems.map((item, i) => (
+                    <div key={i} className="flex items-center gap-1.5">
+                      <FileCode className="w-3.5 h-3.5 shrink-0 text-neutral-400" />
+                      <span className="text-neutral-900 dark:text-neutral-100">{item}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null;
+            })()}
+            <p className="text-neutral-700 dark:text-neutral-300 whitespace-pre-wrap leading-relaxed">
+              {renderTextWithSafeLinks(String(task.finalDiffSummary?.setupNote || task.verification?.setupNote))}
+            </p>
+          </div>
+        )}
+
         {/* Task Failure banner if applicable */}
-        {task.failure && (
+        {task.failure && task.status !== "resolved_with_guidance" && (
           <div className="p-3.5 rounded-lg border border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400 text-xs flex items-start gap-2.5">
             <XCircle className="w-4 h-4 shrink-0 mt-0.5" />
             <div className="space-y-0.5">

@@ -87,6 +87,13 @@ def main():
             if path.is_symlink() or path.stat().st_size > 100_000:
                 raise ValueError("Invalid patched file")
     os.chdir("/workspace")
+    extra_py_paths = ["/workspace"]
+    for sub in ("src", "backend", "backend/src"):
+        candidate = Path("/workspace") / sub
+        if candidate.is_dir() and not candidate.is_symlink():
+            extra_py_paths.append(str(candidate))
+    existing_py_path = os.environ.get("PYTHONPATH", "")
+    os.environ["PYTHONPATH"] = ":".join(extra_py_paths + ([existing_py_path] if existing_py_path else []))
     if os.environ.get("GITRESOLVE_VERIFY_CLEANUP") == "1":
         os.execvp("python", ["python", "-I", "/usr/local/lib/gitresolve_cleanup_verify.py"])
     if os.environ.get("GITRESOLVE_STREAMLIT_ENTRY"):
