@@ -206,13 +206,24 @@ def _expand_context_for_files(base_context: str, originals: dict[str, str], file
     # Prioritize files that were not already included in full in base_context
     prioritized: list[str] = []
     already_full: list[str] = []
+    seen_files: set[str] = set()
     for name in files:
-        if name not in originals:
+        if name not in originals or name in seen_files:
             continue
+        seen_files.add(name)
         line_count = len(originals[name].splitlines())
-        header_present = f"--- {name} (" in base_context
-        last_line_present = line_count > 0 and f"\n{line_count:4}: " in base_context
-        if header_present and last_line_present:
+        header_marker = f"--- {name} ("
+        header_idx = base_context.find(header_marker)
+        is_complete_in_base = False
+        if header_idx != -1 and line_count > 0:
+            next_header_idx = base_context.find("\n--- ", header_idx + len(header_marker))
+            section = base_context[header_idx:] if next_header_idx == -1 else base_context[header_idx:next_header_idx]
+            numbered_lines_in_section = sum(1 for ln in section.splitlines() if re.match(r"^\s*\d+:\s", ln))
+            is_complete_in_base = (
+                numbered_lines_in_section >= line_count
+                and f"\n{line_count:4}: " in section
+            )
+        if is_complete_in_base:
             already_full.append(name)
         else:
             prioritized.append(name)
@@ -306,9 +317,10 @@ def repository_context(root: Path, max_chars: int = 60000, issue: str = "", focu
         ]
         score = (
             500 * (name in focus_set or base in focus_set)
+            + 300 * (path.suffix == ".py" and (name in focus_set or base in focus_set))
             + 200 * is_named
             + 150 * bool(def_hits)
-            + 80 * (path.suffix == ".py")
+            + 250 * (path.suffix == ".py")
             + 60 * base.startswith("test_")
             + 30 * (name in profile.entrypoints)
             + 20 * (name in profile.dependency_files)
@@ -347,7 +359,7 @@ def repository_context(root: Path, max_chars: int = 60000, issue: str = "", focu
                 selected.update(range(max(0, hit - 5), min(len(lines), hit + 15)))
         excerpt = "\n".join(f"{i+1:4}: {lines[i]}" for i in sorted(selected))
         block = f"\n--- {name} (untrusted source; line numbered) ---\n" + redact(excerpt)
-        cap = 12000 if (is_named or def_hits) else 6000
+        cap = (12000 if path.suffix == ".py" else 6000) if (is_named or def_hits) else (6000 if path.suffix == ".py" else 4000)
         block = block[:min(cap, remaining)]
         chunks.append(block)
         remaining -= len(block)

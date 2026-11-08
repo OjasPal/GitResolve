@@ -46,6 +46,8 @@ def load_repository_originals(root: Path) -> dict[str, str]:
         except OSError:
             continue
         parts = PurePosixPath(rel).parts
+        if any(part in {".git", ".venv", "venv", "node_modules", "__pycache__", ".tox"} for part in parts):
+            continue
         is_dotenv_example = (
             parts[-1].lower() in {".env.example", ".env.sample", ".env.template"}
             and not any(part.startswith(".") for part in parts[:-1])

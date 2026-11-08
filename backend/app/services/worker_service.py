@@ -527,7 +527,7 @@ class WorkerService:
         message = safe_message(message, 500)
         now = self.clock()
         target = status_for_failure(code)
-        evidence = list(evidence) or [a["id"] for a in self.store.list_artifacts(task_id)]
+        evidence = list(evidence or ()) or [a["id"] for a in self.store.list_artifacts(task_id)]
 
         def fn(txn: Txn) -> Doc:
             ctx = self._owned(txn, task_id, worker_id, stopping=True)

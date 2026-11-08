@@ -47,6 +47,7 @@ class PlanResult:
     def __post_init__(self):
         from app.core.errors import safe_message
         self.failure_message = safe_message(self.failure_message, 500)
+        self.evidence = list(self.evidence or [])
 
 
 @dataclass
@@ -64,6 +65,7 @@ class ExecuteResult:
     def __post_init__(self):
         from app.core.errors import safe_message
         self.failure_message = safe_message(self.failure_message, 500)
+        self.evidence = list(self.evidence or [])
 
 
 class AgentRunner(Protocol):

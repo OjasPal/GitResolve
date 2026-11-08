@@ -378,3 +378,61 @@ def test_genuine_policy_violation_still_fails_closed(tmp_path):
     assert outcome.outcome == "failed"
     assert outcome.failure_code == FailureCode.POLICY_VIOLATION
     assert status_for_failure(outcome.failure_code) == TaskStatus.FAILED_POLICY
+
+
+def test_expand_context_checks_section_specific_lines_and_hides_raw_paths_in_event(tmp_path):
+    from app.agent.repair_runner import _expand_context_for_files
+
+    originals = {
+        "src/large_frontend.tsx": "\n".join(f"const line_{i} = {i};" for i in range(1, 150)),
+        "backend/services/ai_service.py": "\n".join(f"def fn_{i}(): return {i}" for i in range(1, 50)),
+    }
+    # Simulate base_context where large_frontend.tsx has line 49, while ai_service.py is truncated at line 3
+    base_context = (
+        "--- src/large_frontend.tsx (untrusted source; line numbered) ---\n"
+        + "\n".join(f"{i:4}: const line_{i} = {i};" for i in range(1, 60))
+        + "\n--- backend/services/ai_service.py (untrusted source; line numbered) ---\n"
+        + "\n".join(f"{i:4}: def fn_{i}(): return {i}" for i in range(1, 4))
+    )
+    expanded = _expand_context_for_files(
+        base_context,
+        originals,
+        ["backend/services/ai_service.py", "src/large_frontend.tsx"],
+        max_extra_chars=5000,
+    )
+    assert "--- backend/services/ai_service.py (requested full source; line numbered) ---" in expanded
+    assert "  49: def fn_49(): return 49" in expanded
+
+
+def test_serialized_execute_result_empty_evidence_never_crashes_worker_fail(env):
+    from app.agent.graph_engine.engine import _deserialize_execute_result, _serialize_execute_result
+    from app.agent.interface import ExecuteResult
+    from app.schemas.enums import DispatchPhase, FailureCode
+    from app.services.outcomes import OUTCOME_CODES
+
+    res = ExecuteResult(
+        "needs_clarification",
+        failure_code=FailureCode.ISSUE_AMBIGUOUS,
+        failure_message="Additional context is needed.",
+        next_step="Clarify the target file and expected behavior.",
+    )
+    roundtripped = _deserialize_execute_result(_serialize_execute_result(res))
+    assert roundtripped.evidence == []
+
+    h = env.headers()
+    tid = env.create(h).json()["id"]
+    job = env.worker_service.claim_next("w1")
+    assert job is not None
+    doc = env.worker_service.fail(
+        tid,
+        "w1",
+        roundtripped.failure_code or OUTCOME_CODES.get(roundtripped.outcome, FailureCode.NO_FIX_FOUND),
+        roundtripped.failure_message,
+        DispatchPhase.EXECUTE,
+        outcome=roundtripped.outcome,
+        evidence=roundtripped.evidence,
+        next_step=roundtripped.next_step,
+    )
+    assert doc["status"] == "needs_input"
+    assert "Reference:" not in (doc.get("failure") or {}).get("message", "")
+

@@ -198,14 +198,14 @@ def _check_budget_exhaustion(
 def _serialize_execute_result(res: ExecuteResult) -> dict[str, Any]:
     return {
         "outcome": res.outcome,
-        "final_diff": res.final_diff,
-        "final_tests": res.final_tests,
-        "summary": res.summary,
-        "verification": res.verification,
+        "final_diff": res.final_diff or "",
+        "final_tests": res.final_tests or "",
+        "summary": dict(res.summary or {}),
+        "verification": dict(res.verification or {}),
         "failure_code": res.failure_code.value if hasattr(res.failure_code, "value") else res.failure_code,
-        "failure_message": res.failure_message,
-        "evidence": list(res.evidence) if res.evidence else None,
-        "next_step": res.next_step,
+        "failure_message": res.failure_message or "",
+        "evidence": list(res.evidence or []),
+        "next_step": res.next_step or "",
     }
 
 
@@ -218,14 +218,14 @@ def _deserialize_execute_result(data: dict[str, Any]) -> ExecuteResult:
             pass
     return ExecuteResult(
         data.get("outcome", "failed"),
-        final_diff=data.get("final_diff"),
-        final_tests=data.get("final_tests"),
-        summary=data.get("summary"),
-        verification=data.get("verification"),
+        final_diff=data.get("final_diff") or "",
+        final_tests=data.get("final_tests") or "",
+        summary=dict(data.get("summary") or {}),
+        verification=dict(data.get("verification") or {}),
         failure_code=fc,
-        failure_message=data.get("failure_message"),
-        evidence=data.get("evidence"),
-        next_step=data.get("next_step"),
+        failure_message=data.get("failure_message") or "",
+        evidence=list(data.get("evidence") or []),
+        next_step=data.get("next_step") or "",
     )
 
 
@@ -2787,7 +2787,9 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
                         blocked_recovered = True
                         reason_text = getattr(parsed, "blocked_reason", "") or ""
                         requested = list(getattr(parsed, "needed_files", None) or [])
-                        ref_files = _referenced_files([reason_text, *requested, issue_query], originals)
+                        direct_refs = _referenced_files([reason_text, *requested], originals)
+                        fallback_refs = _referenced_files([issue_query], originals)
+                        ref_files = direct_refs + [f for f in fallback_refs if f not in direct_refs]
                         rt["context"] = _expand_context_for_files(rt["context"], originals, ref_files)
                         recovery_note = (
                             f"Context recovery: added full source for {', '.join(ref_files) if ref_files else 'referenced files'}. "
@@ -2797,7 +2799,7 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
                         _safe_event(
                             ctx,
                             EventType.INFO,
-                            f"Recovering from context request; retrying once with expanded source for {', '.join(ref_files) or 'repository files'}.",
+                            "Expanding repository context to inspect additional source sections.",
                         )
                         ctx.checkpoint()
                         _reserve_supplied_router_call(budgets)
@@ -2807,11 +2809,19 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
                             recent_tools,
                             specialist_advice=spec_advice,
                         )
+                        def _recovery_quality_check(res_cand: Any) -> str | None:
+                            p_cand = getattr(res_cand, "parsed", None)
+                            if getattr(p_cand, "needed_files", None) and not getattr(p_cand, "edits", None):
+                                return (
+                                    "All requested repository files have already been expanded in full in the prompt. "
+                                    "Do not set needed_files; generate the complete EditProposal with tests and edits now."
+                                )
+                            return _quality_check(res_cand)
                         try:
                             response, used_spec_rec, last_tel = _invoke_router_normal(
                                 recovery_prompt,
                                 schema=EditProposal,
-                                quality_check=_quality_check,
+                                quality_check=_recovery_quality_check,
                                 system_instruction=system_instruction,
                                 lane="full",
                                 node="patch",
