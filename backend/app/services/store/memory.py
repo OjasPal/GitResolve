@@ -27,6 +27,8 @@ class _MemTxn(Txn):
         return copy.deepcopy(doc) if doc is not None else None
 
     def get(self, path: str) -> Doc | None:
+        if self._writes:
+            raise PersistenceError("ReadAfterWriteError: Attempted read after write in a transaction.")
         return self._view(path)
 
     def create(self, path: str, data: Doc) -> None:

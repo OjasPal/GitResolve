@@ -265,3 +265,34 @@ def test_legacy_events_are_sanitized_on_read(env):
     response = env.client.get(f"/api/v1/tasks/{tid}/events", headers=h)
     assert response.status_code == 200
     assert "private" not in response.text and "PermissionError" not in response.text
+
+
+def test_transaction_read_after_write_prevented(env):
+    def bad_txn(txn):
+        txn.set("tasks/dummy", {"a": 1})
+        return txn.get("tasks/dummy")
+
+    with pytest.raises(PersistenceError, match="ReadAfterWriteError"):
+        env.store.run_transaction(bad_txn)
+
+    h, tid, job = claimed(env)
+    base_sha = "a" * 40
+    env.store.run_transaction(lambda tx: tx.update(f"tasks/{tid}", {"baseSha": base_sha, "status": "running"}))
+    env.store.set(f"tasks/{tid}/checkpoints/execute", {"threadId": f"{tid}:execute", "hasCheckpoint": True})
+    diff = "--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-old\n+new\n"
+    verification = {"lane": "fast", "verificationLevel": "V1", "reproduced": True, "regressionPassed": True, "testsRun": 1, "newFailures": []}
+    env.worker_service.complete_execution(tid, "w1", diff, "def test_ok(): pass", {"summary": "fixed"}, verification=verification)
+    task = env.get(h, tid)
+    assert task["status"] == "awaiting_approval"
+    cp = env.store.get(f"tasks/{tid}/checkpoints/execute")
+    assert cp["hasCheckpoint"] is False and cp["completed"] is True
+
+    # Verify complete_guidance does not perform read after write with checkpoint present
+    h2, tid2, job2 = claimed(env)
+    env.store.run_transaction(lambda tx: tx.update(f"tasks/{tid2}", {"status": "running"}))
+    env.store.set(f"tasks/{tid2}/checkpoints/execute", {"threadId": f"{tid2}:execute", "hasCheckpoint": True})
+    env.worker_service.complete_guidance(tid2, "w1", {"title": "Setup needed"}, final_tests="def test_g(): pass")
+    task2 = env.get(h2, tid2)
+    assert task2["status"] == "resolved_with_guidance"
+    cp2 = env.store.get(f"tasks/{tid2}/checkpoints/execute")
+    assert cp2["hasCheckpoint"] is False and cp2["completed"] is True
