@@ -111,17 +111,20 @@ def validate_publication(
         )
         return
     tested = receipt.get("verificationPatch") if isinstance(receipt, dict) else None
+    effective_limits = dict(limits)
+    if effective_mode in {"bug", "feature", "refactor"} and int(effective_limits.get("maxDiffLines", 150)) < 120:
+        effective_limits["maxDiffLines"] = min(HARD_CAPS["maxDiffLines"], max(120, int(effective_limits["maxDiffLines"])))
     if tested is not None:
         if publication_patch(tested) != diff:
             raise ValueError("Publication differs from tested implementation")
         extra_files, extra_lines = _count_stripped_test_budget(tested, diff)
-        tested_limits = dict(limits)
+        tested_limits = dict(effective_limits)
         if extra_files > 0:
             tested_limits["maxDiffFiles"] = min(
-                HARD_CAPS["maxDiffFiles"], int(limits["maxDiffFiles"]) + extra_files
+                HARD_CAPS["maxDiffFiles"], int(effective_limits["maxDiffFiles"]) + extra_files
             )
             tested_limits["maxDiffLines"] = min(
-                HARD_CAPS["maxDiffLines"], int(limits["maxDiffLines"]) + extra_lines
+                HARD_CAPS["maxDiffLines"], int(effective_limits["maxDiffLines"]) + extra_lines
             )
         validate_fix(
             tested,
@@ -133,7 +136,7 @@ def validate_publication(
         )
         validate_fix(
             diff,
-            limits,
+            effective_limits,
             evidence,
             base_sha,
             require_regression=False,
@@ -143,7 +146,7 @@ def validate_publication(
     else:
         validate_fix(
             diff,
-            limits,
+            effective_limits,
             evidence,
             base_sha,
             require_regression=effective_mode in {"bug", "feature"},

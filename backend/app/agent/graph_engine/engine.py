@@ -406,6 +406,13 @@ def run_repair_graph(
             pinned_plan_hash = compute_plan_hash(approved_plan)
 
     effective_limits = derive_limits(approved_plan, getattr(task, "limits", None))
+    raw_plan_type = (
+        str(approved_plan.get("task_type") or approved_plan.get("taskType") or "bug").strip().lower()
+        if isinstance(approved_plan, dict)
+        else "bug"
+    )
+    if raw_plan_type in {"bug", "feature", "refactor"} and effective_limits["maxDiffLines"] < 120:
+        effective_limits["maxDiffLines"] = min(HARD_CAPS["maxDiffLines"], max(120, effective_limits["maxDiffLines"]))
     allowed_dep_changes = extract_allowed_dependency_changes(approved_plan)
 
     run_started = time.perf_counter()
@@ -765,6 +772,17 @@ def run_repair_graph(
                 int(effective_limits["maxDiffLines"]) + 120,
             ),
         }
+
+    def _is_retryable_line_only_scope_error(fb_err: str) -> bool:
+        m = re.search(
+            r"(\d+)\s+files,\s+(\d+)\s+changed lines;\s+limits\s+(\d+)\s+files and\s+(\d+)\s+lines",
+            fb_err,
+            re.IGNORECASE,
+        )
+        if not m:
+            return False
+        files_cnt, lines_cnt, max_f, max_l = map(int, m.groups())
+        return files_cnt > 0 and files_cnt <= max_f and lines_cnt > max_l
 
     def _validate_candidate_proposal(proposal: RepairProposal) -> None:
         validate_proposal(
@@ -2961,14 +2979,21 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
                 ctx.usage(attempts_used=attempt)
                 fb_err = str(exc)
                 item = _remember(attempt, fb_err, stage="patch", what_was_tried=explanation)
-                is_out_of_scope_policy = any(
-                    term in fb_err.lower()
-                    for term in (
-                        "config mode only permits",
-                        "unapproved dependency",
-                        "exceeds scope",
+                is_out_of_scope_policy = (
+                    any(
+                        term in fb_err.lower()
+                        for term in (
+                            "config mode only permits",
+                            "unapproved dependency",
+                            "exceeds scope",
+                        )
                     )
-                ) and "0 files, 0 changed lines" not in fb_err.lower()
+                    and "0 files, 0 changed lines" not in fb_err.lower()
+                    and not (
+                        _is_retryable_line_only_scope_error(fb_err)
+                        and attempt < int(effective_limits["maxRepairAttempts"])
+                    )
+                )
                 if is_out_of_scope_policy:
                     return {
                         "budgets": budgets,
@@ -3066,14 +3091,21 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
             ctx.usage(attempts_used=attempt)
             fb_err = str(exc)
             item = _remember(attempt, fb_err, stage="patch", what_was_tried=explanation)
-            is_out_of_scope_policy = any(
-                term in fb_err.lower()
-                for term in (
-                    "config mode only permits",
-                    "unapproved dependency",
-                    "exceeds scope",
+            is_out_of_scope_policy = (
+                any(
+                    term in fb_err.lower()
+                    for term in (
+                        "config mode only permits",
+                        "unapproved dependency",
+                        "exceeds scope",
+                    )
                 )
-            ) and "0 files, 0 changed lines" not in fb_err.lower()
+                and "0 files, 0 changed lines" not in fb_err.lower()
+                and not (
+                    _is_retryable_line_only_scope_error(fb_err)
+                    and attempt < int(effective_limits["maxRepairAttempts"])
+                )
+            )
             if is_out_of_scope_policy:
                 return {
                     "budgets": budgets,
@@ -3189,7 +3221,15 @@ Previous proposal to correct (untrusted proposed code; preserve working parts an
             "artifact_id": artifact_id,
         }
         next_strat_action = _strategy_action_for_category(cat, strategy_override)
-        if cat == FailureCategory.POLICY_BLOCK.value and "exceeds scope" in feedback.lower() and "0 files, 0 changed lines" not in feedback.lower():
+        if (
+            cat == FailureCategory.POLICY_BLOCK.value
+            and "exceeds scope" in feedback.lower()
+            and "0 files, 0 changed lines" not in feedback.lower()
+            and not (
+                _is_retryable_line_only_scope_error(feedback)
+                and attempt < max_attempts
+            )
+        ):
             return {
                 "budgets": budgets,
                 "specialist_calls_used": spec_cnt,

@@ -382,12 +382,16 @@ class TaskService:
                     raise invalid_state("The cleanup scope changed. Investigate the request again before approving.") from None
                 cleanup_updates={"cleanupScope":{**scope,"approved":True},"limits":{**ctx.task["limits"],"maxDiffLines":scope["maxDiffLines"]}}
             elif isinstance(ctx.task.get("plan"), dict):
-                from app.services.policy import derive_limits, validate_plan_scope
+                from app.services.policy import HARD_CAPS, derive_limits, validate_plan_scope
                 try:
                     validate_plan_scope(ctx.task["plan"], ctx.task["limits"])
                 except ValueError as exc:
                     raise invalid_state(str(exc)) from None
-                cleanup_updates = {"limits": derive_limits(ctx.task["plan"], ctx.task["limits"])}
+                derived_limits = derive_limits(ctx.task["plan"], ctx.task["limits"])
+                plan_task_type = str(ctx.task["plan"].get("task_type") or ctx.task["plan"].get("taskType") or "bug").strip().lower()
+                if plan_task_type in {"bug", "feature", "refactor"} and derived_limits["maxDiffLines"] < 120:
+                    derived_limits["maxDiffLines"] = min(HARD_CAPS["maxDiffLines"], max(120, derived_limits["maxDiffLines"]))
+                cleanup_updates = {"limits": derived_limits}
             return apply_change(
                 txn, ctx, self.settings, now,
                 to_status=TaskStatus.RUNNING,

@@ -109,6 +109,23 @@ class LangGraphAgentRunner:
         if raw_task_type not in {"bug", "feature", "refactor", "config", "unclear"}:
             raw_task_type = "bug"
         needs_input = bool(result.get("needs_more_information")) or raw_task_type == "unclear"
+        raw_line_budget = int(result.get("line_budget") or 120)
+        effective_line_budget = (
+            min(int(task.limits.get("maxDiffLines", 150)), max(120, raw_line_budget))
+            if raw_task_type in {"bug", "feature", "refactor"}
+            else raw_line_budget
+        )
+        from agent.graph import compute_plan_hash
+        plan_payload = {
+            "task_type": raw_task_type,
+            "problem_summary": result["problem_summary"],
+            "steps": result["plan"],
+            "spec": result.get("spec", "") or "",
+            "acceptance_criteria": result.get("acceptance_criteria", []) or [],
+            "expected_files": result.get("expected_files", []) or [],
+            "line_budget": effective_line_budget,
+            "dependency_changes": result.get("dependency_changes", []) or [],
+        }
         return PlanResult(
             "needs_input" if needs_input else "ready",
             plan=PlanData(
@@ -121,9 +138,9 @@ class LangGraphAgentRunner:
                 spec=result.get("spec", "") or "",
                 acceptance_criteria=result.get("acceptance_criteria", []) or [],
                 expected_files=result.get("expected_files", []) or [],
-                line_budget=int(result.get("line_budget") or 120),
+                line_budget=effective_line_budget,
                 dependency_changes=result.get("dependency_changes", []) or [],
-                plan_hash=result.get("plan_hash", "") or "",
+                plan_hash=compute_plan_hash(plan_payload),
             ),
         )
 
