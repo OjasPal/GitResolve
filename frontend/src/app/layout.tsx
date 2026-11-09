@@ -24,10 +24,10 @@ export const metadata: Metadata = {
     siteName: "GitResolve",
     images: [
       {
-        url: "/gitresolve-og.png",
-        width: 1200,
-        height: 630,
-        alt: "GitResolve — Ship the fix. Keep the veto.",
+        url: "/gitresolve-logo.png",
+        width: 1024,
+        height: 1024,
+        alt: "GitResolve mascot kitten logo",
         type: "image/png",
       },
     ],
@@ -35,10 +35,10 @@ export const metadata: Metadata = {
     type: "website",
   },
   twitter: {
-    card: "summary_large_image",
+    card: "summary",
     title: "GitResolve — Ship the fix. Keep the veto.",
     description: "From GitHub issue to tested fix. Investigate, repair, and review every pull request before it leaves.",
-    images: ["/gitresolve-og.png"],
+    images: ["/gitresolve-logo.png"],
   },
 };
 
