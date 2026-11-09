@@ -82,8 +82,9 @@ export default function TasksPage() {
 
           <div className="flex items-center gap-2.5">
             <button
-              onClick={() => loadTasks()}
-              disabled={loading}
+              type="button"
+              onClick={() => window.location.reload()}
+              aria-label="Refresh tasks"
               className="p-2 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300 text-xs font-semibold cursor-pointer disabled:opacity-50"
               title="Refresh tasks"
             >

@@ -197,6 +197,8 @@ export interface TaskResponse {
     linesRemoved?: number;
     setupNote?: string;
     setupNoteHash?: string;
+    setupWhatWeFound?: string[];
+    whatWeFound?: string[];
     placeholderEnv?: string[];
     resolutionKind?: string;
   } | null;

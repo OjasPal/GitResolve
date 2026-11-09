@@ -100,12 +100,13 @@ export default function RepositoriesPage() {
 
           <div className="flex items-center gap-2.5">
             <button
-              onClick={loadRepos}
-              disabled={loading}
+              type="button"
+              onClick={() => window.location.reload()}
+              aria-label="Refresh repositories"
               className="p-2 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300 text-xs font-semibold cursor-pointer disabled:opacity-50"
               title="Refresh repositories"
             >
-              <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+              <RefreshCw className={`w-4 h-4 ${loading || repoQuery.refreshing ? "animate-spin" : ""}`} />
             </button>
             <a
               href={githubAppUrl}

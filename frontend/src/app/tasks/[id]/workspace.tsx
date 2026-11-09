@@ -282,14 +282,13 @@ function TaskWorkspaceContent() {
             </div>
           )}
           <button
-            onClick={() => {
-              fetchTaskDetails(false);
-              fetchNewEvents();
-            }}
+            type="button"
+            onClick={() => window.location.reload()}
+            aria-label="Refresh state"
             className="p-1.5 rounded-md border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-600 dark:text-neutral-300 cursor-pointer"
             title="Refresh state"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
           </button>
         </div>
       </div>
@@ -428,7 +427,7 @@ function TaskWorkspaceContent() {
               const foundItems = (
                 Array.isArray(task.finalDiffSummary?.setupWhatWeFound)
                   ? task.finalDiffSummary.setupWhatWeFound
-                  : Array.isArray(task.finalDiffSummary?.whatWeFound) && task.status !== "resolved_with_guidance"
+                  : Array.isArray(task.finalDiffSummary?.whatWeFound)
                   ? task.finalDiffSummary.whatWeFound
                   : []
               ) as string[];
