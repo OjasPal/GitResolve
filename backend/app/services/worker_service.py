@@ -375,6 +375,8 @@ class WorkerService:
 
         def fn(txn: Txn) -> Doc:
             ctx = self._owned(txn, task_id, worker_id)
+            cp_path = f"tasks/{task_id}/checkpoints/execute"
+            has_cp = txn.get(cp_path) is not None
             diff_doc = self._artifact_doc(ctx.task, "final_diff", ArtifactType.FINAL_DIFF, final_diff, None, now)
             tests_doc = self._artifact_doc(ctx.task, "final_tests", ArtifactType.FINAL_TESTS, final_tests, None, now)
             from app.services.policy import validate_fix
@@ -394,8 +396,7 @@ class WorkerService:
                     raise ExecutionLimit(FailureCode.POLICY_VIOLATION)
             txn.set(artifact_path(task_id, "final_diff"), diff_doc)
             txn.set(artifact_path(task_id, "final_tests"), tests_doc)
-            cp_path = f"tasks/{task_id}/checkpoints/execute"
-            if txn.get(cp_path) is not None:
+            if has_cp:
                 txn.set(cp_path, {"threadId": f"{task_id}:execute", "hasCheckpoint": False, "completed": True})
             clean_summary = dict(summary or {})
             setup_note_hash = None
@@ -444,13 +445,14 @@ class WorkerService:
 
         def fn(txn: Txn) -> Doc:
             ctx = self._owned(txn, task_id, worker_id)
+            cp_path = f"tasks/{task_id}/checkpoints/execute"
+            has_cp = txn.get(cp_path) is not None
             if final_tests:
                 tests_doc = self._artifact_doc(
                     ctx.task, "final_tests", ArtifactType.FINAL_TESTS, final_tests, None, now
                 )
                 txn.set(artifact_path(task_id, "final_tests"), tests_doc)
-            cp_path = f"tasks/{task_id}/checkpoints/execute"
-            if txn.get(cp_path) is not None:
+            if has_cp:
                 txn.set(cp_path, {"threadId": f"{task_id}:execute", "hasCheckpoint": False, "completed": True})
             clean_outcome = redact_value(dict(guidance_outcome or {}))
             clean_outcome.setdefault("kind", "needs_user_action")

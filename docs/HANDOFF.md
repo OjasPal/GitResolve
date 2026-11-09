@@ -1,24 +1,26 @@
-# Handoff — 2026-11-10 — Firestore Index & OpenGraph Updates
+# Handoff — 2026-11-10 — Firestore Read-After-Write Fix & Error Sanitization
 
 ## Branch and commits
-- Branch: `main`
-- Recent commits:
-  - `41585e1` fix(frontend): use gitresolve-logo.png for OpenGraph and remove og-named images
-  - `22bc639` fix(deploy): improve Windows gcloud CLI execution and setup automation
-  - `3ecf2dd` feat(frontend): add mascot kitten OpenGraph and Twitter social sharing metadata and icons
+- Branch: `agent/workflow-optimization`
+- Recent commit: `e35958f` fix(worker): prevent Firestore read-after-write in complete_execution and sanitize UI error references
 
 ## Working state and validation
-- Firestore indexes:
-  - Created composite index for `count_user_tasks_since` (`collectionGroup=tasks`, `userId` ASC, `createdAt` ASC) -> `READY`.
-  - Both indexes (`userId`+`createdAt` DESC for list, `userId`+`createdAt` ASC for rate limit counting) are active.
-- Worker:
-  - Configured `gitresolve-worker.service` systemd unit on GCE VM `gitresolve-worker` (`asia-south2-a`); status is `active (running)`.
-- OpenGraph:
-  - Replaced landscape banners with square mascot kitten logo `gitresolve-logo.png` (1024x1024) in `frontend/src/app/layout.tsx`.
-  - Frontend production build verified clean (0 errors).
+- Root cause:
+  - In `WorkerService.complete_execution` and `complete_guidance`, `txn.get(cp_path)` was called after `txn.set(artifact_path(...))`. In Google Cloud Firestore transactions, all reads must precede writes, which triggered `ReadAfterWriteError` when transitioning verified repairs to `awaiting_approval`.
+- Fixes applied:
+  - `backend/app/services/worker_service.py`: Read checkpoint upfront (`txn.get(cp_path)`) before staging artifact writes in `complete_execution` and `complete_guidance`.
+  - `backend/app/services/store/memory.py`: Added strict read-after-write guard to `_MemTxn` so unit tests catch Firestore read-after-write regressions locally.
+  - `frontend/src/components/EventTimeline.tsx`: Scrubbed raw hex incident references (`Reference: <hex>`) and replaced unexpected internal error text with user-friendly notices.
+  - `backend/tests/unit/test_workflow_optimization.py`: Added `test_transaction_read_after_write_prevented` verifying `_MemTxn` rejection and `complete_execution`/`complete_guidance` read ordering.
+- Validation:
+  - `test_workflow_optimization.py`: 30 passed in 1.91s.
+  - `test_repair_runner.py`, `test_phase_2b_recovery.py`: 70 passed in 8.97s.
+  - Frontend production build: verified clean (0 errors).
+  - Deployed updated `worker_service.py` to GCE VM `gitresolve-worker` and restarted `gitresolve-worker.service` (active and polling).
+  - Redeployed Cloud Run API revision `gitresolve-api-00004-bk6` (healthy).
 
 ## Remaining work
-- Push `main` to GitHub (`git push origin main`) to deploy latest OpenGraph changes to Vercel.
+- Push `agent/workflow-optimization` / merge to `main` upon user authorization to trigger Vercel frontend update.
 
 ## Gotchas
-- When creating tasks, task creation calls `count_user_tasks_since`, requiring `userId` ASC + `createdAt` ASC composite index on `tasks`.
+- Firestore transactions strictly enforce read-before-write across all documents in the transaction callback.
