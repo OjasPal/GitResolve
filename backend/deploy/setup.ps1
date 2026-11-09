@@ -1,11 +1,11 @@
 # One-time Google Cloud setup for GitResolve (idempotent; safe to re-run).
-# Usage (PowerShell): .\backend\deploy\setup.ps1 -Project <gcp-project-id> [-Region asia-south1]
+# Usage (PowerShell): .\backend\deploy\setup.ps1 -Project <gcp-project-id> [-Region asia-south2]
 # Needs: gcloud (logged in, billing enabled on the project).
 param(
   [Parameter(Mandatory = $true)][string]$Project,
-  [string]$Region = "asia-south1"
+  [string]$Region = "asia-south2"
 )
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 $ApiSa = "gitresolve-api"
 $WorkerSa = "gitresolve-worker"
 $ApiSecrets = @("session-jwt-secret", "github-app-client-secret", "github-app-private-key")
@@ -14,17 +14,17 @@ $AllSecrets = @("session-jwt-secret", "github-app-client-secret", "github-app-pr
 
 function G {
   # Runs gcloud and stops on failure.
-  & gcloud --project $Project --quiet @args
+  & gcloud.cmd --project $Project --quiet @args
   if ($LASTEXITCODE -ne 0) { throw "gcloud $($args -join ' ') failed" }
 }
 function GOptional {
   # Runs gcloud, hides output and ignores "already exists" style failures.
-  & gcloud --project $Project --quiet @args 2>$null | Out-Null
+  & gcloud.cmd --project $Project --quiet @args 2>$null | Out-Null
   if ($LASTEXITCODE -ne 0) { Write-Host "   (skipped: already exists or pending)" }
   $global:LASTEXITCODE = 0
 }
 function HasVersion([string]$Name) {
-  $out = & gcloud --project $Project --quiet secrets versions list $Name --limit=1 "--format=value(name)" 2>$null
+  $out = & gcloud.cmd --project $Project --quiet secrets versions list $Name --limit=1 "--format=value(name)" 2>$null
   return -not [string]::IsNullOrWhiteSpace(($out | Out-String))
 }
 function AddSecretFromText([string]$Name, [string]$Text) {
@@ -43,7 +43,7 @@ function ReadSecretText([string]$Prompt) {
 
 Write-Host "== Enabling APIs"
 G services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com `
-  secretmanager.googleapis.com firestore.googleapis.com iam.googleapis.com logging.googleapis.com
+  secretmanager.googleapis.com firestore.googleapis.com iam.googleapis.com logging.googleapis.com aiplatform.googleapis.com
 
 Write-Host "== Artifact Registry repository"
 GOptional artifacts repositories create gitresolve --repository-format=docker "--location=$Region" "--description=GitResolve images"
@@ -75,15 +75,15 @@ if (-not (HasVersion "session-jwt-secret")) {
   Write-Host "   generated session-jwt-secret"
 }
 if (-not (HasVersion "github-app-client-secret")) {
-  $value = ReadSecretText "GitHub App client secret (Enter to skip)"
+  $value = if ($env:GITHUB_APP_CLIENT_SECRET) { $env:GITHUB_APP_CLIENT_SECRET } else { ReadSecretText "GitHub App client secret (Enter to skip)" }
   if ($value) { AddSecretFromText "github-app-client-secret" $value }
 }
 if (-not (HasVersion "github-app-private-key")) {
-  $pem = Read-Host "Path to GitHub App private key .pem (Enter to skip)"
+  $defaultPem = "$HOME\.gitresolve-secrets\github-app.pem"; $pem = if (Test-Path $defaultPem) { $defaultPem } else { Read-Host "Path to GitHub App private key .pem (Enter to skip)" }
   if ($pem) { G secrets versions add github-app-private-key "--data-file=$pem" | Out-Null }
 }
 if (-not (HasVersion "gemini-api-key")) {
-  $value = ReadSecretText "Gemini API key for the worker (Enter to skip)"
+  $value = if ($env:GEMINI_API_KEY) { $env:GEMINI_API_KEY } else { "" }
   if ($value) { AddSecretFromText "gemini-api-key" $value }
 }
 

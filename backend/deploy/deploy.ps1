@@ -6,7 +6,7 @@ param(
   [string]$Region = "asia-south1",
   [string]$Tag = (Get-Date -Format "yyyyMMdd-HHmmss")
 )
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 $Service = "gitresolve-api"
 $Here = $PSScriptRoot
 $Backend = Split-Path $Here -Parent
@@ -14,9 +14,9 @@ $EnvFile = Join-Path $Here "env.production.yaml"
 $Image = "$Region-docker.pkg.dev/$Project/gitresolve/api:$Tag"
 if (-not (Test-Path $EnvFile)) { throw "Missing $EnvFile (copy env.production.yaml.example)" }
 
-function G { & gcloud @args; if ($LASTEXITCODE -ne 0) { throw "gcloud $($args -join ' ') failed" } }
+function G { & gcloud.cmd @args; if ($LASTEXITCODE -ne 0) { throw "gcloud $($args -join ' ') failed" } }
 
-$Number = (& gcloud projects describe $Project "--format=value(projectNumber)").Trim()
+$Number = (& gcloud.cmd projects describe $Project "--format=value(projectNumber)").Trim()
 if ($LASTEXITCODE -ne 0) { throw "Could not read the project number." }
 $Url = "https://$Service-$Number.$Region.run.app"
 $Rendered = [System.IO.Path]::GetTempFileName()
@@ -36,7 +36,7 @@ try {
     --set-secrets "SESSION_JWT_SECRET=session-jwt-secret:latest,GITHUB_APP_CLIENT_SECRET=github-app-client-secret:latest,GITHUB_APP_PRIVATE_KEY=github-app-private-key:latest"
 } finally { Remove-Item $Rendered -Force -ErrorAction SilentlyContinue }
 
-$Live = (& gcloud run services describe $Service --project $Project --region $Region "--format=value(status.url)").Trim()
+$Live = (& gcloud.cmd run services describe $Service --project $Project --region $Region "--format=value(status.url)").Trim()
 Write-Host "== Service URL: $Live"
 if ($Live -ne $Url) { Write-Warning "URL differs from the callback host used ($Url). Set GITHUB_APP_CALLBACK_URL explicitly and redeploy." }
 Write-Host "== Health check"
