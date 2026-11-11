@@ -8,28 +8,31 @@
 
 GitResolve is an autonomous, verification-centric AI issue investigation and repair platform for Python repositories. It analyzes issues, builds an actionable investigation plan, reproduces faults, verifies candidate patches in a hardened Docker sandbox, and creates draft GitHub pull requests only after explicit human approval.
 
-<br />
-
 <p align="center">
   <a href="https://gitresolve-agent.vercel.app/" target="_blank">
-    <img src="https://img.shields.io/badge/Live%20App-gitresolve--agent.vercel.app-10B981?style=for-the-badge&logo=vercel&logoColor=white" alt="Live App" />
+    <img src="https://img.shields.io/badge/LAUNCH_LIVE_APP-000000?style=for-the-badge&logo=vercel&logoColor=FF2E4D&labelColor=000000&color=000000" alt="Launch Live App" height="38" />
   </a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.12" />
   &nbsp;
-  <a href="https://github.com/OjasPal/GitResolve">
-    <img src="https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.12" />
-  </a>
+  <img src="https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI" />
   &nbsp;
   <img src="https://img.shields.io/badge/Next.js-14-000000?style=for-the-badge&logo=next.js&logoColor=white" alt="Next.js" />
   &nbsp;
-  <img src="https://img.shields.io/badge/Docker-Hardened%20Sandbox-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker" />
+  <img src="https://img.shields.io/badge/Docker-Sandbox-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker" />
   &nbsp;
   <img src="https://img.shields.io/badge/Google%20GenAI-Gemini%20Flash-4285F4?style=for-the-badge&logo=google&logoColor=white" alt="Gemini" />
 </p>
 
 <p align="center">
-  <a href="https://gitresolve-agent.vercel.app/" target="_blank">
-    <strong>Launch GitResolve Web Console &rarr;</strong>
-  </a>
+  <a href="#what-it-does">Overview</a> &bull;
+  <a href="#visual-showcase">Showcase</a> &bull;
+  <a href="#agentic-workflow--verification-architecture">Workflow Architecture</a> &bull;
+  <a href="#architecture--components">Components</a> &bull;
+  <a href="#production-deployment-architecture">Deployment</a> &bull;
+  <a href="#getting-started">Run Locally</a>
 </p>
 
 </div>
@@ -88,42 +91,42 @@ Inspect the verified diff hash and test receipts. Upon your authorization, GitRe
 ```mermaid
 flowchart TD
     subgraph Ingestion ["1. INGESTION & PLANNING"]
-        A[GitHub Issue or Bug Report] --> B[FastAPI Control Plane: Validate & Store Task]
-        B --> C[Asynchronous Worker Claims Distributed Lease]
-        C --> D[LangGraph Planning Engine]
-        D --> E[Structured Investigation Plan & Budget]
+        A["GitHub Issue or Bug Report"] --> B["FastAPI Control Plane: Validate & Store Task"]
+        B --> C["Asynchronous Worker Claims Distributed Lease"]
+        C --> D["LangGraph Planning Engine"]
+        D --> E["Structured Investigation Plan & Budget"]
     end
 
     subgraph Gate1 ["GATE 1: HUMAN PLAN REVIEW"]
         E --> G1{"Developer Plan Review<br/>(Interactive Dialogue)"}
-        G1 -- Request Re-plan / Clarify --> D
-        G1 -- Reject / Cancel --> X1[Task Cancelled]
-        G1 -- Approve Plan --> F[Dispatch Repair Phase]
+        G1 -- "Request Re-plan / Clarify" --> D
+        G1 -- "Reject / Cancel" --> X1["Task Cancelled"]
+        G1 -- "Approve Plan" --> F["Dispatch Repair Phase"]
     end
 
     subgraph SandboxExecution ["2. HARDENED DOCKER SANDBOX REPAIR LOOP"]
-        F --> G[Acquire Pinned Git Snapshot]
-        G --> H[Launch Ephemeral Docker Container<br/>(No Network, No Host Secrets, Read-Only FS)]
-        H --> I[Execute Baseline Test Suite]
-        I --> J[Agent Fault Localization & Minimal Reproduction Test]
-        J --> K[Propose Constrained Code Patch]
-        K --> L[Sandbox Verification: Full Suite + Regression Test]
-        L --> M{Deterministic Policy & Safety Gate}
-        M -- Tests Fail / Scope Exceeded --> N[Iterate / Backtrack Repair]
+        F --> G["Acquire Pinned Git Snapshot"]
+        G --> H["Launch Ephemeral Docker Container<br/>(No Network, No Host Secrets, Read-Only FS)"]
+        H --> I["Execute Baseline Test Suite"]
+        I --> J["Agent Fault Localization & Minimal Reproduction Test"]
+        J --> K["Propose Constrained Code Patch"]
+        K --> L["Sandbox Verification: Full Suite + Regression Test"]
+        L --> M{"Deterministic Policy & Safety Gate"}
+        M -- "Tests Fail / Scope Exceeded" --> N["Iterate / Backtrack Repair"]
         N --> K
     end
 
     subgraph Gate2 ["GATE 2: HUMAN DIFF APPROVAL"]
-        M -- Verified Patch --> G2{"Developer Diff Approval<br/>(Review Exact Diff Hash & Test Receipts)"}
-        G2 -- Reject Patch --> N
-        G2 -- Approve Exact Diff --> O[Publication Phase Dispatched]
+        M -- "Verified Patch" --> G2{"Developer Diff Approval<br/>(Review Exact Diff Hash & Test Receipts)"}
+        G2 -- "Reject Patch" --> N
+        G2 -- "Approve Exact Diff" --> O["Publication Phase Dispatched"]
     end
 
     subgraph Publication ["3. GITHUB PUBLICATION"]
-        O --> P[Cryptographic Hash & Receipt Re-validation]
-        P --> Q[Create Isolated Fix Branch]
-        Q --> R[Commit Verified Patch]
-        R --> S[Open Draft Pull Request on GitHub]
+        O --> P["Cryptographic Hash & Receipt Re-validation"]
+        P --> Q["Create Isolated Fix Branch"]
+        Q --> R["Commit Verified Patch"]
+        R --> S["Open Draft Pull Request on GitHub"]
     end
 
     classDef gate fill:#1e293b,stroke:#38bdf8,stroke-width:2px,color:#f8fafc;
