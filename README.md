@@ -77,7 +77,7 @@ Watch the agent worker execute baseline tests, fault localization, test reproduc
 
 <br /><br />
 
-### 4. Gate 2 Approval & Draft Pull Request Created
+### 4. Draft Pull Request Created
 Inspect the verified diff hash and test receipts. Upon your authorization, GitResolve publishes a clean draft Pull Request to GitHub.
 
 <img src="assets/screenshots/04-pull-request-created.jpg" alt="Pull Request Created" width="850" />
