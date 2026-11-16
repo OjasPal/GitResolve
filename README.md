@@ -170,40 +170,22 @@ GitResolve separates the user-facing web application, control plane, asynchronou
 
 GitResolve is architected as a resilient, decoupled cloud system deployed across Google Cloud Platform and Vercel:
 
-```
-┌─────────────────────────────────┐
-│        Next.js 14 Frontend      │   (Vercel Edge Network)
-│  gitresolve-agent.vercel.app    │
-└────────────────┬────────────────┘
-                 │ HTTPS / REST (with Firebase Bearer Token)
-                 ▼
-┌─────────────────────────────────┐
-│       FastAPI Control Plane     │   (Google Cloud Run)
-│   Stateless API Service         │
-└───────┬─────────────────┬───────┘
-        │                 │
-        │ Distributed     │ ACID Task State & Events
-        │ Lease Polling   ▼
-        │        ┌─────────────────────────┐
-        │        │  Google Cloud Firestore │
-        │        │  (Transactional Store)  │
-        │        └────────▲────────────────┘
-        ▼                 │
-┌─────────────────────────┴───────┐
-│     GitResolve Agent Worker     │   (Google Compute Engine VM - e2-standard-4)
-│  Async Worker Daemon + Docker   │
-│  ┌───────────────────────────┐  │
-│  │ Hardened Docker Sandbox   │  │
-│  │ (Isolated Container Exec) │  │
-│  └───────────────────────────┘  │
-└────────────────┬────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────┐
-│    External Provider APIs       │
-│  • Google GenAI (Gemini Flash)  │
-│  • GitHub App API (Octokit)     │
-└─────────────────────────────────┘
+```mermaid
+flowchart TD
+    Frontend["Next.js 14 Frontend - Vercel Edge Network"]
+    API["FastAPI Control Plane - Google Cloud Run"]
+    Firestore[("Google Cloud Firestore - Transactional Task Store")]
+    subgraph GCE ["Google Compute Engine VM (e2-standard-4)"]
+        Worker["GitResolve Agent Worker - Async Daemon"]
+        Sandbox["Hardened Docker Sandbox - Isolated Container"]
+        Worker --> Sandbox
+    end
+    External["External APIs - Google GenAI & GitHub App"]
+
+    Frontend -- "HTTPS REST (Firebase Bearer Token)" --> API
+    API -- "ACID Task State & Events" --> Firestore
+    Worker <-- "Distributed Lease Polling & State Updates" --> Firestore
+    Worker -- "Model Routing & PR Publication" --> External
 ```
 
 - **Frontend on Vercel**: Hosted at [`gitresolve-agent.vercel.app`](https://gitresolve-agent.vercel.app/), delivering edge-cached static assets, dark-mode terminal aesthetics, and reactive polling for real-time lifecycle event logs.
