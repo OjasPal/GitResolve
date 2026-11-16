@@ -15,6 +15,10 @@ GitResolve is an autonomous, verification-centric AI issue investigation and rep
 </p>
 
 <p align="center">
+  <a href="https://github.com/OjasPal/GitResolve/actions/workflows/ci.yml">
+    <img src="https://github.com/OjasPal/GitResolve/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" height="28" />
+  </a>
+  &nbsp;
   <img src="https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.12" />
   &nbsp;
   <img src="https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI" />
