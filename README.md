@@ -28,6 +28,7 @@ GitResolve is an autonomous, verification-centric AI issue investigation and rep
 
 <p align="center">
   <a href="#what-it-does">Overview</a> &bull;
+  <a href="#demo-video">Demo Video</a> &bull;
   <a href="#visual-showcase">Showcase</a> &bull;
   <a href="#agentic-workflow--verification-architecture">Workflow Architecture</a> &bull;
   <a href="#architecture--components">Components</a> &bull;
@@ -49,6 +50,16 @@ The workflow has two explicit human gates:
 2. **Gate 2 — Approve the exact verified diff** before GitHub publication. Developers inspect the full diff, reproduction evidence, and test receipts.
 
 Approval is cryptographically bound to the diff hash that was reviewed. Any subsequent change invalidates the approval and requires re-verification. GitResolve creates **draft pull requests**; it never auto-merges into target repositories.
+
+---
+
+## Demo Video
+
+<div align="center">
+
+[![Watch the demo](https://img.youtube.com/vi/kd_3Lb1vapY/maxresdefault.jpg)](https://youtu.be/kd_3Lb1vapY)
+
+</div>
 
 ---
 
@@ -210,6 +221,23 @@ GitResolve is architected as a resilient, decoupled cloud system deployed across
 - **Container Isolation**: Repository commands and tests run in Docker, never on the API or worker host. Execution containers run with network disabled and receive no host credentials.
 - **Diff Hash Integrity**: The exact SHA-256 hash of the unified diff approved by the developer must match the publication payload byte-for-byte.
 - **Supported Targets**: Currently optimized for Python 3.12 repositories on Linux x86-64 using `pytest` and Streamlit `AppTest`.
+
+### Limits & Budgets
+
+| Limit | Value | Where it's defined (file/constant) |
+| :--- | :--- | :--- |
+| Max model calls per task | `50` | `backend/app/core/config.py` (`Settings.max_model_calls`), `backend/app/services/policy.py` (`HARD_CAPS["maxModelCalls"]`) |
+| Max repair attempts per task | `6` (cap: `1`–`12`) | `backend/app/core/config.py` (`Settings.max_repair_attempts`), `backend/app/services/policy.py` (`HARD_CAPS["maxRepairAttempts"]`) |
+| Max tool calls per task | `120` | `backend/app/agent/graph_engine/state.py` (`DEFAULT_MAX_TOOL_CALLS`) |
+| Max graph steps per task | `240` | `backend/app/agent/graph_engine/state.py` (`DEFAULT_MAX_GRAPH_STEPS`) |
+| Max specialist (`gemini-4-argon`) calls | `2` | `backend/app/agent/graph_engine/state.py` (`MAX_SPECIALIST_CALLS_PER_TASK`) |
+| Input / output token budget | `300,000` / `40,000` tokens | `backend/app/agent/graph_engine/state.py` (`DEFAULT_MAX_INPUT_TOKENS`, `DEFAULT_MAX_OUTPUT_TOKENS`) |
+| Diff scope limit | `5` files, `150` lines (`400` max w/ deletions) | `backend/app/core/config.py` (`Settings.max_diff_files`, `Settings.max_diff_lines`), `sandbox/models.py` (`ExecutionRequest.max_diff_lines`) |
+| Sandbox command timeout | `60s` default (`300s` max) | `sandbox/models.py` (`ExecutionRequest.timeout_seconds`), `backend/app/core/config.py` (`Settings.execution_timeout_seconds`) |
+| Task execution timeout | `1,800s` (30 min) | `backend/app/core/config.py` (`Settings.task_timeout_seconds`) |
+| Worker lease / heartbeat | `90s` lease / `30s` heartbeat | `backend/app/core/config.py` (`Settings.lease_seconds`, `Settings.heartbeat_seconds`) |
+| Daily task quota | `10` tasks/day | `backend/app/core/config.py` (`Settings.max_tasks_per_day`) |
+| API rate limits | `300` req/min per IP, `30` writes/min per user | `backend/app/core/config.py` (`Settings.rate_limit_per_minute_ip`, `Settings.rate_limit_writes_per_minute_user`) |
 
 ---
 
