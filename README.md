@@ -12,6 +12,10 @@ GitResolve is an autonomous, verification-centric AI issue investigation and rep
   <a href="https://gitresolve-agent.vercel.app/" target="_blank">
     <img src="https://img.shields.io/badge/LAUNCH_LIVE_APP-000000?style=for-the-badge&logo=vercel&logoColor=FF2E4D&labelColor=000000&color=000000" alt="Launch Live App" height="38" />
   </a>
+  &nbsp;&nbsp;
+  <a href="https://youtu.be/kd_3Lb1vapY" target="_blank">
+    <img src="https://img.shields.io/badge/WATCH_DEMO_VIDEO-FF2E4D?style=for-the-badge&logo=youtube&logoColor=white&labelColor=000000&color=FF2E4D" alt="Watch Demo Video" height="38" />
+  </a>
 </p>
 
 <p align="center">
@@ -32,7 +36,6 @@ GitResolve is an autonomous, verification-centric AI issue investigation and rep
 
 <p align="center">
   <a href="#what-it-does">Overview</a> &bull;
-  <a href="#demo-video">Demo Video</a> &bull;
   <a href="#visual-showcase">Showcase</a> &bull;
   <a href="#agentic-workflow--verification-architecture">Workflow Architecture</a> &bull;
   <a href="#architecture--components">Components</a> &bull;
@@ -54,16 +57,6 @@ The workflow has two explicit human gates:
 2. **Gate 2 — Approve the exact verified diff** before GitHub publication. Developers inspect the full diff, reproduction evidence, and test receipts.
 
 Approval is cryptographically bound to the diff hash that was reviewed. Any subsequent change invalidates the approval and requires re-verification. GitResolve creates **draft pull requests**; it never auto-merges into target repositories.
-
----
-
-## Demo Video
-
-<div align="center">
-
-[![Watch the demo](https://img.youtube.com/vi/kd_3Lb1vapY/maxresdefault.jpg)](https://youtu.be/kd_3Lb1vapY)
-
-</div>
 
 ---
 
